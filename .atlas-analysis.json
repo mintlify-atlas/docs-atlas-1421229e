@@ -1,0 +1,104 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "Building Reliable Agents",
+  "projectDescription": "LangChain Academy course for building, observing, evaluating, and deploying reliable AI agents with LangSmith.",
+  "theme": "palm",
+  "primaryColor": "#1E40AF",
+  "lightColor": "#3B82F6",
+  "darkColor": "#1E3A8A",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "setup/python",
+              "setup/typescript"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/observability",
+              "concepts/tracing",
+              "concepts/evaluation"
+            ]
+          },
+          {
+            "group": "Building Agents",
+            "pages": [
+              "agents/officeflow-overview",
+              "agents/agent-versions",
+              "agents/analyzing-agents"
+            ]
+          },
+          {
+            "group": "Evaluation",
+            "pages": [
+              "evaluation/datasets",
+              "evaluation/experiments",
+              "evaluation/code-based",
+              "evaluation/llm-judge",
+              "evaluation/pairwise"
+            ]
+          },
+          {
+            "group": "Production",
+            "pages": [
+              "production/overview",
+              "production/trace-upload",
+              "production/online-evals"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Python",
+            "pages": [
+              "api/python/agent",
+              "api/python/tools",
+              "api/python/evaluators"
+            ]
+          },
+          {
+            "group": "TypeScript",
+            "pages": [
+              "api/typescript/agent",
+              "api/typescript/tools",
+              "api/typescript/evaluators"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "LangSmith tracing and observability for AI agents",
+    "Customer support agent (Emma) with progressive improvements",
+    "Code-based, LLM-as-judge, and pairwise evaluation methods",
+    "SQLite database integration for product inventory",
+    "RAG-based knowledge base search with embeddings",
+    "Production-ready trace upload and online evaluation",
+    "Parallel Python and TypeScript implementations"
+  ],
+  "publicApiSurface": [
+    "agent_v0.py - Baseline agent without tracing",
+    "agent_v1.py - Agent with LangSmith tracing",
+    "agent_v2.py - Enhanced tool instructions",
+    "agent_v3.py - Stock information policy",
+    "agent_v4.py - No-chunking RAG",
+    "agent_v5.py - Conciseness improvements",
+    "query_database - Tool for product inventory queries",
+    "search_knowledge_base - Tool for company policy search",
+    "schema_before_query - Evaluator for database schema checks",
+    "eval_conciseness_pairwise - Pairwise conciseness evaluator",
+    "run_experiment - Experiment runner for agent evaluation",
+    "upload_traces - Trace upload utility for production"
+  ]
+}
