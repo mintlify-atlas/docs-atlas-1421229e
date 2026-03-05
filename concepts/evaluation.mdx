@@ -1,0 +1,492 @@
+---
+title: Evaluation Strategies for AI Agents
+description: Learn how to systematically measure and improve agent quality using datasets, experiments, and automated evaluators
+---
+
+## Why Evaluate?
+
+AI agents are non-deterministic. You can't just run a test suite and call it done. Instead, you need systematic evaluation to:
+
+- **Catch regressions** when you change prompts, models, or tools
+- **Measure improvements** objectively when iterating on your agent
+- **Identify failure patterns** across different types of inputs
+- **Build confidence** before deploying to production
+- **Monitor quality** continuously as your agent serves real users
+
+<Tip>
+Evaluation is not a one-time task. It's a continuous process that runs throughout development and in production.
+</Tip>
+
+## The Evaluation Foundation: Datasets
+
+Before you can evaluate, you need a dataset—a collection of test cases with inputs and (optionally) expected outputs.
+
+### Anatomy of a Dataset
+
+Each example in your dataset should include:
+
+- **Inputs**: The question or request the user makes
+- **Reference outputs** (optional): The expected or ideal response
+- **Metadata**: Tags, categories, or context about the test case
+
+### Creating Datasets
+
+You can create datasets in several ways:
+
+<CardGroup cols={2}>
+  <Card title="From Real Traffic" icon="users">
+    Export actual user interactions from your traces. This ensures your evaluations reflect real-world usage.
+  </Card>
+  
+  <Card title="Handcrafted Test Cases" icon="pen">
+    Write specific scenarios to test edge cases, known failure modes, or requirements from your PRD.
+  </Card>
+  
+  <Card title="Synthetic Generation" icon="robot">
+    Use an LLM to generate diverse test cases based on your agent's capabilities.
+  </Card>
+  
+  <Card title="From Bugs" icon="bug">
+    When users report issues, add them to your dataset to prevent regressions.
+  </Card>
+</CardGroup>
+
+### Example: OfficeFlow Dataset
+
+The OfficeFlow agent uses a dataset with questions like:
+
+```json
+{
+  "question": "Do you have printer paper in stock?",
+  "reference_answer": "Should check database and provide current inventory",
+  "metadata": {
+    "category": "inventory_check",
+    "requires_tools": ["query_database"]
+  }
+}
+```
+
+```json
+{
+  "question": "What's your return policy?",
+  "reference_answer": "Should search knowledge base for return policy",
+  "metadata": {
+    "category": "policy_question",
+    "requires_tools": ["search_knowledge_base"]
+  }
+}
+```
+
+This dataset covers different agent capabilities and ensures you test both tools.
+
+## Running Experiments
+
+An experiment runs your agent against a dataset and applies evaluators to measure performance.
+
+### Basic Experiment Structure
+
+```python
+import asyncio
+from pathlib import Path
+from langsmith import aevaluate
+from agent_v1 import chat, load_knowledge_base
+
+async def chat_wrapper(inputs: dict) -> dict:
+    """Wrapper to adapt dataset inputs to chat function signature."""
+    question = inputs.get("question", "")
+    result = await chat(question)
+    return {"answer": result["output"], "messages": result["messages"]}
+
+async def main():
+    # Load any required resources (like knowledge base)
+    await load_knowledge_base(kb_dir="./knowledge_base")
+    
+    # Run evaluation
+    results = await aevaluate(
+        chat_wrapper,
+        data="officeflow-dataset",  # Dataset name in LangSmith
+        experiment_prefix="agent-v1"
+    )
+    
+    print(f"Evaluation complete! Results: {results}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+This runs your agent on every example in the dataset and creates a new experiment in LangSmith.
+
+<Tip>
+Use `experiment_prefix` to organize experiments by version. This makes it easy to compare "agent-v1" vs "agent-v2" later.
+</Tip>
+
+## Types of Evaluators
+
+Evaluators are functions that score agent outputs. There are three main types:
+
+### 1. Code-Based Evaluators
+
+Deterministic evaluators that check specific conditions. These work like unit tests.
+
+#### Example: Schema-Before-Query Evaluator
+
+This evaluator checks that the agent inspects the database schema before running queries:
+
+```python
+import re
+
+SCHEMA_PATTERNS = [
+    r"PRAGMA\s+table_info",
+    r"SELECT\s+.*FROM\s+sqlite_master",
+    r"PRAGMA\s+database_list",
+]
+
+def _is_schema_query(sql: str) -> bool:
+    """Return True if the SQL is a schema-inspection query."""
+    for pattern in SCHEMA_PATTERNS:
+        if re.search(pattern, sql, re.IGNORECASE):
+            return True
+    return False
+
+def schema_before_query(run, example) -> dict:
+    """Score 1 if agent checks DB schema before querying data, 0 otherwise."""
+    # Extract tool calls from the run
+    tool_calls = _extract_tool_calls(run)
+    db_calls = [tc for tc in tool_calls if tc["name"] == "query_database"]
+    
+    if not db_calls:
+        return {"score": 1, "comment": "No database calls - N/A"}
+    
+    # Check if schema query appears before first data query
+    seen_schema_check = False
+    for tc in db_calls:
+        sql = tc.get("arguments", "")
+        if _is_schema_query(sql):
+            seen_schema_check = True
+        else:
+            # First data query - was schema checked first?
+            if not seen_schema_check:
+                return {
+                    "score": 0,
+                    "comment": f"Agent queried data without checking schema first."
+                }
+            break
+    
+    return {"score": 1, "comment": "Agent checked schema before querying"}
+```
+
+**Use cases for code-based evaluators:**
+- Checking tool usage patterns
+- Validating output format (JSON schema, specific fields)
+- Verifying security requirements (no PII in logs)
+- Measuring response length or token usage
+
+### 2. LLM-as-Judge Evaluators
+
+Use an LLM to evaluate subjective criteria that are hard to code.
+
+#### Example: Correctness Evaluator
+
+```python
+from openai import OpenAI
+
+client = OpenAI()
+
+CORRECTNESS_PROMPT = """You are evaluating an AI customer support agent's response.
+
+User Question: {question}
+
+Agent Response: {response}
+
+Reference Context: {reference}
+
+Is the agent's response correct and helpful? Consider:
+- Does it answer the question accurately?
+- Does it use appropriate tools if needed?
+- Is the information factually correct?
+
+Respond with a score from 0 to 1:
+- 1.0: Completely correct and helpful
+- 0.5: Partially correct but missing important details
+- 0.0: Incorrect or unhelpful
+
+Output only the numeric score."""
+
+def evaluate_correctness(run, example) -> dict:
+    """Use GPT to evaluate response correctness."""
+    question = example.inputs.get("question", "")
+    response = run.outputs.get("answer", "")
+    reference = example.outputs.get("reference_answer", "N/A")
+    
+    result = client.chat.completions.create(
+        model="gpt-5-nano",
+        messages=[
+            {"role": "system", "content": "You are an evaluator. Respond with only a number."},
+            {"role": "user", "content": CORRECTNESS_PROMPT.format(
+                question=question,
+                response=response,
+                reference=reference
+            )}
+        ]
+    )
+    
+    score = float(result.choices[0].message.content.strip())
+    
+    return {
+        "score": score,
+        "comment": f"LLM judge scored {score} for correctness"
+    }
+```
+
+**Use cases for LLM-as-judge:**
+- Evaluating helpfulness or tone
+- Checking semantic correctness when exact wording varies
+- Assessing whether the response follows specific guidelines
+- Measuring conciseness or clarity
+
+<Tip>
+**Best practice**: Use more powerful models (like GPT-4) as judges, even if your agent uses smaller models. The judge's accuracy is critical for reliable evaluation.
+</Tip>
+
+### 3. Pairwise Evaluators
+
+Compare two versions of your agent side-by-side to measure relative improvement.
+
+#### Example: Conciseness Comparison
+
+```python
+from openai import OpenAI
+from langsmith import evaluate
+
+client = OpenAI()
+
+CONCISENESS_PROMPT = """You are evaluating two responses to the same customer question.
+Determine which response is MORE CONCISE while still providing all crucial information.
+
+**Question:** {question}
+
+**Response A:**
+{response_a}
+
+**Response B:**
+{response_b}
+
+Output your verdict as a single number:
+1 if Response A is more concise while preserving crucial information
+2 if Response B is more concise while preserving crucial information
+0 if they are roughly equal"""
+
+def conciseness_evaluator(inputs: dict, outputs: list[dict]) -> list[int]:
+    """Compare two responses for conciseness."""
+    response = client.chat.completions.create(
+        model="gpt-5-nano",
+        messages=[
+            {"role": "system", "content": "You are a conciseness evaluator. Respond with only: 0, 1, or 2."},
+            {"role": "user", "content": CONCISENESS_PROMPT.format(
+                question=inputs["question"],
+                response_a=outputs[0].get("answer", "N/A"),
+                response_b=outputs[1].get("answer", "N/A"),
+            )}
+        ],
+    )
+    
+    preference = int(response.choices[0].message.content.strip())
+    
+    if preference == 1:
+        return [1, 0]  # A wins
+    elif preference == 2:
+        return [0, 1]  # B wins
+    else:
+        return [0, 0]  # Tie
+
+# Run pairwise evaluation
+evaluate(
+    ("agent-v4-experiment", "agent-v5-experiment"),
+    evaluators=[conciseness_evaluator],
+    randomize_order=True,  # Prevent position bias
+)
+```
+
+**Use cases for pairwise evaluation:**
+- A/B testing different prompts or models
+- Measuring incremental improvements
+- Evaluating subjective qualities where absolute scoring is hard
+- Detecting regressions when refactoring
+
+## Combining Evaluators
+
+Real-world evaluation uses multiple evaluators to measure different aspects:
+
+```python
+from langsmith import aevaluate
+
+results = await aevaluate(
+    chat_wrapper,
+    data="officeflow-dataset",
+    evaluators=[
+        schema_before_query,      # Code-based: tool usage correctness
+        evaluate_correctness,      # LLM-judge: response quality
+        measure_latency,           # Code-based: performance
+        check_hallucination,       # LLM-judge: factual accuracy
+    ],
+    experiment_prefix="agent-v2"
+)
+```
+
+Each evaluator provides a different lens on agent performance:
+
+<CardGroup cols={2}>
+  <Card title="Functional Correctness" icon="check">
+    Does the agent produce correct outputs and use tools properly?
+  </Card>
+  
+  <Card title="Quality & Style" icon="star">
+    Is the response helpful, concise, and appropriate in tone?
+  </Card>
+  
+  <Card title="Performance" icon="gauge">
+    Does the agent respond quickly enough for production use?
+  </Card>
+  
+  <Card title="Safety" icon="shield">
+    Does the agent avoid hallucinations, PII leaks, or harmful outputs?
+  </Card>
+</CardGroup>
+
+## Interpreting Results
+
+After running an experiment, LangSmith shows:
+
+- **Aggregate scores** for each evaluator
+- **Pass rate** across the dataset
+- **Individual run details** with inputs, outputs, and scores
+- **Comparison view** when you select multiple experiments
+
+### What to Look For
+
+1. **Overall trends**: Is your new version improving or regressing?
+2. **Failure patterns**: Do certain types of questions consistently fail?
+3. **Trade-offs**: Did you improve accuracy but hurt latency?
+4. **Edge cases**: Which specific examples are still failing?
+
+### Iteration Loop
+
+```
+1. Run experiment on current agent version
+2. Analyze results - identify failures
+3. Hypothesize improvements (better prompt, different tool, etc.)
+4. Implement changes
+5. Run new experiment
+6. Compare with previous version
+7. Repeat until metrics meet your targets
+```
+
+<Tip>
+**Save every experiment**. Even failed iterations provide valuable data about what doesn't work. You'll often revisit old experiments when debugging new issues.
+</Tip>
+
+## Real-World Example: OfficeFlow Evolution
+
+The course demonstrates iterative improvement through 6 versions:
+
+- **v0**: Baseline (no tracing)
+- **v1**: + LangSmith tracing  
+  *Evaluation: Can now see what agent is doing*
+  
+- **v2**: + Enhanced tool instructions  
+  *Evaluation: Tool usage improves from 60% to 85% accuracy*
+  
+- **v3**: + Stock information policy  
+  *Evaluation: Reduces hallucinations about inventory*
+  
+- **v4**: + No-chunking RAG  
+  *Evaluation: Knowledge base retrieval accuracy improves*
+  
+- **v5**: + Conciseness improvements  
+  *Evaluation: Pairwise comparison shows 70% prefer v5 responses*
+
+Each version is validated with experiments before moving to the next iteration.
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Start Simple" icon="seedling">
+    Begin with a small dataset (10-20 examples) and basic evaluators. Add complexity as you learn what matters.
+  </Card>
+  
+  <Card title="Test Edge Cases" icon="triangle-exclamation">
+    Include challenging examples: ambiguous questions, multi-step reasoning, tool failures, and adversarial inputs.
+  </Card>
+  
+  <Card title="Version Your Datasets" icon="code-branch">
+    As your agent evolves, your evaluation needs change. Create new datasets for new capabilities.
+  </Card>
+  
+  <Card title="Automate Everything" icon="robot">
+    Run evaluations automatically on every code change (CI/CD) to catch regressions immediately.
+  </Card>
+  
+  <Card title="Balance Speed and Quality" icon="scale-balanced">
+    Use fast evaluators (code-based) for rapid iteration, and slower ones (LLM-judge) for final validation.
+  </Card>
+  
+  <Card title="Continuous Monitoring" icon="chart-line">
+    In production, run evaluators on random samples of traffic to detect quality drift over time.
+  </Card>
+</CardGroup>
+
+## Common Pitfalls
+
+### Pitfall 1: Dataset Overfitting
+
+If you optimize only for your test dataset, you might hurt generalization.
+
+**Solution**: Maintain separate datasets for development and final validation.
+
+### Pitfall 2: Flaky Evaluators
+
+LLM-as-judge evaluators can be inconsistent.
+
+**Solution**: Run evaluations multiple times and look at variance. Use temperature=0 for judges to reduce randomness.
+
+### Pitfall 3: Ignoring Latency
+
+Focusing only on quality can lead to slow agents.
+
+**Solution**: Always include performance evaluators alongside quality metrics.
+
+### Pitfall 4: Binary Thinking
+
+Not every improvement is clear-cut. Sometimes v2 is better at X but worse at Y.
+
+**Solution**: Use multiple evaluators and make trade-offs explicit. Document why you chose one version over another.
+
+## From Evaluation to Production
+
+Once you're confident in your agent's performance:
+
+1. **Run final validation** on a held-out dataset
+2. **Set quality thresholds** for continuous monitoring
+3. **Configure online evaluators** to score production traffic
+4. **Set up alerts** for when metrics drop below thresholds
+5. **Schedule periodic re-evaluation** to catch model drift
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Creating Datasets" icon="database" href="/guides/creating-datasets">
+    Learn techniques for building comprehensive test datasets
+  </Card>
+  
+  <Card title="Writing Evaluators" icon="code" href="/guides/writing-evaluators">
+    Deep dive into building custom evaluators for your use case
+  </Card>
+  
+  <Card title="Analyzing Results" icon="microscope" href="/guides/analyzing-experiments">
+    Master the LangSmith UI for experiment comparison and debugging
+  </Card>
+  
+  <Card title="Production Monitoring" icon="satellite-dish" href="/guides/production-monitoring">
+    Set up continuous evaluation for deployed agents
+  </Card>
+</CardGroup>

@@ -1,0 +1,687 @@
+---
+title: "Analyzing Agent Behavior"
+description: "Use LangSmith traces to understand and improve agent performance"
+---
+
+## Why Tracing Matters
+
+AI agents are complex systems that make multiple LLM calls, use various tools, and maintain conversation state. When something goes wrong—or right—you need to understand exactly what happened.
+
+Tracing gives you:
+
+<CardGroup cols={2}>
+  <Card title="Complete Visibility" icon="eye">
+    See every step: LLM calls, tool invocations, inputs, outputs, and timing
+  </Card>
+  
+  <Card title="Debugging Context" icon="bug">
+    Understand why an agent made a particular decision or used a specific tool
+  </Card>
+  
+  <Card title="Performance Metrics" icon="gauge">
+    Measure latency, token usage, and cost per interaction
+  </Card>
+  
+  <Card title="Pattern Recognition" icon="magnifying-glass-chart">
+    Identify common failure modes or inefficient behavior patterns
+  </Card>
+</CardGroup>
+
+## Setting Up Tracing
+
+The OfficeFlow agent uses LangSmith for tracing. The setup involves three steps:
+
+### 1. Wrap the OpenAI Client
+
+<Tabs>
+  <Tab title="Python">
+    ```python
+    from langsmith.wrappers import wrap_openai
+    from openai import AsyncOpenAI
+
+    # Wrap client for automatic LLM call tracing
+    client = wrap_openai(AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY")))
+    ```
+    
+    This automatically traces all calls to `client.chat.completions.create()` and `client.embeddings.create()`.
+  </Tab>
+  
+  <Tab title="TypeScript">
+    ```typescript
+    import { wrapOpenAI } from "langsmith/wrappers";
+    import OpenAI from "openai";
+
+    // Wrap client for automatic LLM call tracing
+    const client = wrapOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
+    ```
+    
+    This automatically traces all calls to `client.chat.completions.create()` and `client.embeddings.create()`.
+  </Tab>
+</Tabs>
+
+### 2. Decorate Tools
+
+<Tabs>
+  <Tab title="Python">
+    ```python
+    from langsmith import traceable
+
+    @traceable(name="query_database", run_type="tool")
+    def query_database(query: str, db_path: str) -> str:
+        """Execute SQL query against the inventory database."""
+        try:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute(query)
+            results = cursor.fetchall()
+            conn.close()
+            return str(results)
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+    @traceable(name="search_knowledge_base", run_type="tool")
+    async def search_knowledge_base(query: str, top_k: int = 2) -> str:
+        """Search knowledge base using semantic similarity."""
+        # ... implementation
+        pass
+    ```
+  </Tab>
+  
+  <Tab title="TypeScript">
+    ```typescript
+    import { traceable } from "langsmith/traceable";
+
+    const queryDatabase = traceable(
+      (query: string, dbPath: string): string => {
+        try {
+          const db = new Database(dbPath);
+          const results = db.prepare(query).all();
+          db.close();
+          return JSON.stringify(results);
+        } catch (e: any) {
+          return `Error: ${e.message}`;
+        }
+      },
+      { name: "query_database", run_type: "tool" }
+    );
+
+    const searchKnowledgeBase = traceable(
+      async (query: string, topK: number = 2): Promise<string> => {
+        // ... implementation
+      },
+      { name: "search_knowledge_base", run_type: "tool" }
+    );
+    ```
+  </Tab>
+</Tabs>
+
+### 3. Trace the Main Chat Function
+
+<Tabs>
+  <Tab title="Python">
+    ```python
+    from langsmith import uuid7
+
+    thread_id = str(uuid7())  # Unique ID for this conversation
+
+    @traceable(name="Emma", metadata={"thread_id": thread_id})
+    async def chat(question: str) -> str:
+        """Process a user question and return assistant response."""
+        # ... chat logic
+        pass
+    ```
+  </Tab>
+  
+  <Tab title="TypeScript">
+    ```typescript
+    import { uuid7 } from "langsmith";
+
+    const threadId = String(uuid7());  // Unique ID for this conversation
+
+    const chat = traceable(
+      async (question: string): Promise<{ messages: any[]; output: string }> => {
+        // ... chat logic
+      },
+      { name: "Emma", metadata: { thread_id: threadId } }
+    );
+    ```
+  </Tab>
+</Tabs>
+
+### Environment Configuration
+
+Set these environment variables to enable LangSmith:
+
+```bash
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_API_KEY=your_api_key_here
+LANGCHAIN_PROJECT=officeflow-agent  # Optional: organize traces by project
+```
+
+## Anatomy of a Trace
+
+When you run the agent and ask a question, LangSmith creates a hierarchical trace:
+
+```
+Emma (parent trace)
+├── ChatOpenAI (LLM call #1)
+│   ├── Input: system prompt + user question
+│   └── Output: assistant message with tool_calls
+│
+├── query_database (tool)
+│   ├── Input: {query: "SELECT name FROM sqlite_master WHERE type='table'"}
+│   └── Output: "[('products',), ('inventory',)]"
+│
+├── query_database (tool)
+│   ├── Input: {query: "PRAGMA table_info(products)"}
+│   └── Output: "[(0, 'id', 'INTEGER', ...), ...]"
+│
+├── query_database (tool)
+│   ├── Input: {query: "SELECT * FROM products WHERE category='Paper'"}
+│   └── Output: "[('P001', 'Copy Paper', 'Paper', ...), ...]"
+│
+└── ChatOpenAI (LLM call #2)
+    ├── Input: previous messages + tool results
+    └── Output: final user-facing response
+```
+
+### Key Components
+
+<AccordionGroup>
+  <Accordion title="Parent Trace (Emma)">
+    - Represents the entire interaction
+    - Contains metadata like `thread_id` for grouping conversations
+    - Shows total latency and cost for the full response
+  </Accordion>
+
+  <Accordion title="LLM Calls (ChatOpenAI)">
+    - Includes full prompt (system + history + user message)
+    - Shows model parameters (temperature, model name, etc.)
+    - Displays token counts (prompt tokens, completion tokens)
+    - Records latency and cost
+    - Contains the raw response including tool calls
+  </Accordion>
+
+  <Accordion title="Tool Calls">
+    - Shows which tool was called and why
+    - Displays input arguments (e.g., the SQL query)
+    - Records the output returned to the LLM
+    - Captures errors if the tool failed
+    - Measures tool execution time
+  </Accordion>
+</AccordionGroup>
+
+## Common Debugging Scenarios
+
+### Scenario 1: Wrong Tool Called
+
+**Problem**: Agent uses `search_knowledge_base` when it should use `query_database`.
+
+**How to diagnose**:
+
+1. Open the trace in LangSmith
+2. Look at the first LLM call's output
+3. Check the `tool_calls` array to see which tool was selected
+4. Examine the LLM's reasoning by looking at any `content` before tool calls
+5. Review your tool descriptions - are they clear and distinct?
+
+**Common causes**:
+- Tool descriptions are too similar
+- System prompt doesn't clearly delineate when to use each tool
+- User query is ambiguous
+
+**Fix**: Update tool descriptions or add examples to the system prompt.
+
+### Scenario 2: Tool Returns Error
+
+**Problem**: Tool call fails with an error like "no such column: product_name".
+
+**How to diagnose**:
+
+<Steps>
+  <Step title="Find the Tool Trace">
+    Click on the `query_database` node in the trace tree
+  </Step>
+  <Step title="Check the Input">
+    Look at the SQL query the agent generated. Does it match your schema?
+  </Step>
+  <Step title="Check the Output">
+    See the error message. Does it indicate a schema mismatch, permission issue, or syntax error?
+  </Step>
+  <Step title="Verify Schema Discovery">
+    Look at previous tool calls in the trace. Did the agent discover the schema first?
+  </Step>
+</Steps>
+
+**Common causes**:
+- Agent didn't discover schema (missing from tool description)
+- Agent hallucinated column names
+- Database connection issues
+
+**Fix**: Add schema discovery instructions to tool description (see v2 in [Agent Versions](/agents/agent-versions)).
+
+### Scenario 3: Poor Response Quality
+
+**Problem**: Agent's final response is too verbose, inaccurate, or unhelpful.
+
+**How to diagnose**:
+
+1. Open the final LLM call in the trace
+2. Examine the full prompt passed to the LLM:
+   - System prompt
+   - Conversation history
+   - Tool results
+   - User question
+3. Check if tool results contained the right information
+4. Look for context window issues (truncation, too much irrelevant data)
+5. Review the completion to see if the LLM properly synthesized the tool results
+
+**Common causes**:
+- System prompt doesn't include relevant guidelines
+- Tool returned too much or too little information
+- No examples of good responses in the prompt
+- Agent is using stale conversation history
+
+**Fix**: 
+- Add specific instructions to system prompt (e.g., conciseness directive)
+- Improve tool output formatting
+- Add few-shot examples
+
+### Scenario 4: Excessive Tool Use
+
+**Problem**: Agent makes 5+ tool calls for a simple question.
+
+**How to diagnose**:
+
+1. Count tool call nodes in the trace
+2. Check if tool calls are redundant (same query multiple times)
+3. Look for schema discovery happening multiple times
+4. See if agent is exploring different tables unnecessarily
+
+**Common causes**:
+- Agent doesn't remember it already discovered schema
+- Tool description encourages exploration
+- Agent is uncertain and tries multiple approaches
+
+**Fix**:
+- Cache schema information in conversation history
+- Provide schema upfront in system prompt for small databases
+- Add instruction to minimize tool calls
+
+### Scenario 5: Ignoring Tool Results
+
+**Problem**: Agent calls a tool but doesn't use the results in its response.
+
+**How to diagnose**:
+
+1. Find the tool call in the trace
+2. Note what data was returned
+3. Look at the final LLM call
+4. Check if the tool result is in the prompt but not referenced in the completion
+5. See if there's a prompt engineering issue causing the LLM to ignore tool results
+
+**Common causes**:
+- Tool result format is hard to parse (e.g., deeply nested JSON)
+- Tool returned error but system prompt doesn't handle errors well
+- System prompt doesn't emphasize using tool results
+
+**Fix**:
+- Format tool results more clearly (e.g., use markdown tables)
+- Add explicit instruction: "Base your answer on the tool results"
+- Handle tool errors gracefully in the tool function
+
+## Analyzing Patterns Across Traces
+
+### Filters and Search
+
+LangSmith allows you to:
+
+<Tabs>
+  <Tab title="Filter by Metadata">
+    ```python
+    # All traces for a specific thread
+    thread_id = "abc-123-def-456"
+    # Filter in LangSmith UI: metadata.thread_id = "abc-123-def-456"
+    ```
+    
+    View all interactions in a single conversation to understand context.
+  </Tab>
+  
+  <Tab title="Filter by Status">
+    ```
+    # Show only errors
+    status = "error"
+    
+    # Show only successful traces
+    status = "success"
+    ```
+    
+    Focus on problematic interactions.
+  </Tab>
+  
+  <Tab title="Search by Input/Output">
+    ```
+    # Find all queries about "paper"
+    input contains "paper"
+    
+    # Find responses that mentioned returns
+    output contains "returns@officeflow.com"
+    ```
+    
+    Identify how the agent handles specific topics.
+  </Tab>
+</Tabs>
+
+### Metrics and Analytics
+
+LangSmith provides aggregate metrics:
+
+<CardGroup cols={2}>
+  <Card title="Latency Distribution" icon="clock">
+    - P50, P95, P99 latency
+    - Identify slow traces
+    - Compare versions
+  </Card>
+  
+  <Card title="Cost Analysis" icon="dollar-sign">
+    - Total tokens used
+    - Cost per trace
+    - Cost breakdown by model
+  </Card>
+  
+  <Card title="Error Rate" icon="circle-exclamation">
+    - Percentage of failed traces
+    - Common error types
+    - Trends over time
+  </Card>
+  
+  <Card title="Tool Usage" icon="wrench">
+    - How often each tool is called
+    - Average calls per trace
+    - Tool success rate
+  </Card>
+</CardGroup>
+
+## Comparing Agent Versions
+
+When you improve your agent (e.g., v4 → v5), use traces to measure impact:
+
+### 1. Create Separate Projects
+
+```bash
+# v4 traces
+LANGCHAIN_PROJECT=officeflow-agent-v4
+
+# v5 traces  
+LANGCHAIN_PROJECT=officeflow-agent-v5
+```
+
+### 2. Run the Same Test Cases
+
+Create a test set and run it against both versions:
+
+<Tabs>
+  <Tab title="Python">
+    ```python
+    test_cases = [
+        "Do you have copy paper?",
+        "What's your return policy?",
+        "I need 500 staplers for my office",
+        "Are you open on weekends?",
+    ]
+
+    for question in test_cases:
+        response = await chat(question)
+        # Automatically traced to current project
+    ```
+  </Tab>
+  
+  <Tab title="TypeScript">
+    ```typescript
+    const testCases = [
+      "Do you have copy paper?",
+      "What's your return policy?",
+      "I need 500 staplers for my office",
+      "Are you open on weekends?",
+    ];
+
+    for (const question of testCases) {
+      const response = await chat(question);
+      // Automatically traced to current project
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### 3. Compare Metrics
+
+| Metric | v4 | v5 | Change |
+|--------|----|----|--------|
+| Avg latency | 2.3s | 1.9s | -17% |
+| Avg tokens (completion) | 156 | 98 | -37% |
+| Avg cost per trace | $0.0023 | $0.0015 | -35% |
+| Tool calls per trace | 2.1 | 2.1 | 0% |
+| Error rate | 2.3% | 2.1% | -0.2pp |
+
+This shows v5's conciseness directive reduced token usage by 37% without affecting tool usage or increasing errors.
+
+### 4. Qualitative Analysis
+
+Beyond metrics, manually review traces:
+
+<Accordion title="Checklist for Trace Review">
+  - [ ] Do responses sound natural and helpful?
+  - [ ] Is tool usage logical and efficient?
+  - [ ] Are errors handled gracefully?
+  - [ ] Does the agent follow all instructions in the system prompt?
+  - [ ] Are there any unexpected behaviors?
+  - [ ] Does the agent maintain context across turns?
+  - [ ] Are there any prompt injection vulnerabilities?
+</Accordion>
+
+## Debugging Workflow
+
+When investigating an issue:
+
+<Steps>
+  <Step title="Reproduce the Issue">
+    Run the agent with the problematic input. Note the trace URL.
+  </Step>
+  
+  <Step title="Open the Trace">
+    Click through to LangSmith and open the trace tree.
+  </Step>
+  
+  <Step title="Identify the Problem Step">
+    - If wrong tool: Look at first LLM call's tool selection
+    - If tool error: Find the failing tool node
+    - If bad output: Examine final LLM call
+  </Step>
+  
+  <Step title="Inspect Inputs/Outputs">
+    Click on the problematic node and review:
+    - Input: What data did this step receive?
+    - Output: What did it produce?
+    - Metadata: Timing, model parameters, etc.
+  </Step>
+  
+  <Step title="Form a Hypothesis">
+    Based on the trace, what caused the issue?
+    - Unclear instructions?
+    - Missing context?
+    - Tool implementation bug?
+    - Model limitation?
+  </Step>
+  
+  <Step title="Implement a Fix">
+    - Update system prompt
+    - Improve tool description
+    - Fix tool implementation
+    - Add error handling
+  </Step>
+  
+  <Step title="Verify with Traces">
+    Run the same input again and compare new trace to old trace.
+  </Step>
+</Steps>
+
+## Advanced: Custom Metadata
+
+Add custom metadata to traces for richer analysis:
+
+<Tabs>
+  <Tab title="Python">
+    ```python
+    from langsmith import traceable
+
+    @traceable(
+        name="Emma",
+        metadata={
+            "thread_id": thread_id,
+            "customer_id": "CUST-12345",  # If authenticated
+            "version": "v5",
+            "environment": "production",
+        }
+    )
+    async def chat(question: str) -> str:
+        # ... implementation
+        pass
+    ```
+  </Tab>
+  
+  <Tab title="TypeScript">
+    ```typescript
+    import { traceable } from "langsmith/traceable";
+
+    const chat = traceable(
+      async (question: string): Promise<{ messages: any[]; output: string }> => {
+        // ... implementation
+      },
+      {
+        name: "Emma",
+        metadata: {
+          thread_id: threadId,
+          customer_id: "CUST-12345",  // If authenticated
+          version: "v5",
+          environment: "production",
+        },
+      }
+    );
+    ```
+  </Tab>
+</Tabs>
+
+Then filter by custom metadata in LangSmith:
+- `metadata.version = "v5"`
+- `metadata.environment = "production"`
+- `metadata.customer_id = "CUST-12345"`
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Trace Everything" icon="layer-group">
+    Wrap all LLM calls, tools, and major functions. More visibility is better.
+  </Card>
+  
+  <Card title="Use Descriptive Names" icon="tag">
+    Name traces and tools clearly so you can understand traces at a glance.
+  </Card>
+  
+  <Card title="Add Rich Metadata" icon="circle-info">
+    Include context like user IDs, versions, environments for better filtering.
+  </Card>
+  
+  <Card title="Review Regularly" icon="calendar-check">
+    Don't just check traces when things break. Review periodically to find improvements.
+  </Card>
+  
+  <Card title="Share Traces" icon="share-nodes">
+    LangSmith traces are shareable URLs. Use them in bug reports and code reviews.
+  </Card>
+  
+  <Card title="Combine with Evals" icon="clipboard-check">
+    Traces show what happened. Evaluations measure if it was good.
+  </Card>
+</CardGroup>
+
+## Tracing in Production
+
+<Warning>
+  Be mindful of these considerations when tracing in production:
+  
+  - **Privacy**: Traces contain user inputs and agent outputs. Ensure compliance with privacy policies.
+  - **Cost**: LangSmith charges based on trace volume. Monitor usage.
+  - **Performance**: Tracing adds minimal latency (~10-50ms) but test in your environment.
+  - **Sampling**: For high-volume applications, consider sampling (trace 10% of requests).
+</Warning>
+
+Example sampling implementation:
+
+<Tabs>
+  <Tab title="Python">
+    ```python
+    import random
+    from langsmith import traceable
+
+    SAMPLE_RATE = 0.1  # Trace 10% of requests
+
+    async def chat(question: str) -> str:
+        should_trace = random.random() < SAMPLE_RATE
+        
+        if should_trace:
+            return await chat_traced(question)
+        else:
+            return await chat_untraced(question)
+
+    @traceable(name="Emma", metadata={"thread_id": thread_id})
+    async def chat_traced(question: str) -> str:
+        # ... implementation
+        pass
+
+    async def chat_untraced(question: str) -> str:
+        # Same implementation without @traceable
+        pass
+    ```
+  </Tab>
+  
+  <Tab title="TypeScript">
+    ```typescript
+    import { traceable } from "langsmith/traceable";
+
+    const SAMPLE_RATE = 0.1;  // Trace 10% of requests
+
+    async function chat(question: string): Promise<{ messages: any[]; output: string }> {
+      const shouldTrace = Math.random() < SAMPLE_RATE;
+      
+      if (shouldTrace) {
+        return await chatTraced(question);
+      } else {
+        return await chatUntraced(question);
+      }
+    }
+
+    const chatTraced = traceable(
+      async (question: string): Promise<{ messages: any[]; output: string }> => {
+        // ... implementation
+      },
+      { name: "Emma", metadata: { thread_id: threadId } }
+    );
+
+    async function chatUntraced(question: string): Promise<{ messages: any[]; output: string }> {
+      // Same implementation without traceable wrapper
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Run the Agent" icon="play" href="/agents/officeflow-overview">
+    Get hands-on experience with the OfficeFlow agent and generate your own traces
+  </Card>
+  
+  <Card title="Build Evaluations" icon="clipboard-check" href="/evaluating/correctness-eval">
+    Use traces to create datasets and build automated evaluations
+  </Card>
+</CardGroup>

@@ -1,0 +1,188 @@
+---
+title: "OfficeFlow Agent Overview"
+description: "Meet Emma, the AI customer support agent for OfficeFlow Supply Co."
+---
+
+## Introduction
+
+The OfficeFlow agent is a customer support assistant named Emma, designed to help customers of OfficeFlow Supply Co., a paper and office supplies distributor serving small-to-medium businesses across North America.
+
+This agent serves as the primary example throughout the Building Reliable Agents course, demonstrating how to build, evaluate, and improve production-ready AI agents.
+
+## Agent Persona
+
+Emma is a customer support specialist with 3 years at OfficeFlow, known for being:
+
+- **Helpful and efficient** - Focuses on solving customer problems quickly
+- **Genuinely caring** - Treats every interaction as an opportunity to build trust
+- **Knowledgeable** - Has access to product databases and company knowledge bases
+- **Human** - Uses natural language, shows empathy, and avoids robotic responses
+
+## Core Capabilities
+
+The agent can help with:
+
+<AccordionGroup>
+  <Accordion title="Product Information">
+    - Answer questions about office supplies, paper products, writing instruments, organizational tools, and desk accessories
+    - Provide detailed product specifications and details
+    - Recommend products based on customer needs and budget
+  </Accordion>
+
+  <Accordion title="Inventory & Availability">
+    - Check current stock levels in real-time
+    - Help customers find available alternatives
+    - Communicate availability using strategic language (e.g., "in stock" vs "running low")
+  </Accordion>
+
+  <Accordion title="Company Policies & Information">
+    - Search knowledge base for policy information
+    - Answer questions about shipping, returns, ordering processes
+    - Provide contact information for specialized departments
+  </Accordion>
+</AccordionGroup>
+
+## What the Agent Cannot Handle
+
+Emma is designed with clear boundaries and will redirect customers to appropriate channels for:
+
+- **Order Placement** → Web portal or sales@officeflow.com
+- **Order Status & Tracking** → Account portal or fulfillment@officeflow.com
+- **Returns & Refunds** → returns@officeflow.com
+- **Account Changes** → accounts@officeflow.com
+- **Technical Support** → support@officeflow.com
+
+## Key Design Principles
+
+### 1. Check Database First
+
+The agent is instructed to **always check the database first** before asking clarifying questions. This creates a better user experience:
+
+<CodeGroup>
+```text Bad Approach
+Customer: "Do you have any paper?"
+Agent: "What type of paper are you looking for?"
+```
+
+```text Good Approach
+Customer: "Do you have any paper?"
+Agent: [Checks database first] "Yes! We carry several types of copy paper. We have letter size, legal size, and specialty papers. Are you looking for standard 8.5x11, or a specific weight or finish?"
+```
+</CodeGroup>
+
+### 2. Strategic Stock Communication
+
+The agent never reveals exact stock quantities. Instead, it uses strategic language:
+
+- **> 20 units**: "In stock" or "Available"
+- **10-20 units**: "In stock, but running low"
+- **5-9 units**: "Only a few left in stock"
+- **1-4 units**: "Very limited stock remaining"
+- **0 units**: "Currently out of stock"
+
+This protects competitive advantage while creating appropriate urgency.
+
+### 3. Concise Communication
+
+The agent prioritizes brevity:
+
+- Get straight to the answer
+- Avoid unnecessary filler or repetition
+- If something can be said in one sentence, don't use three
+
+## Tools & Architecture
+
+The agent has access to two primary tools:
+
+<CardGroup cols={2}>
+  <Card title="query_database" icon="database">
+    Executes SQL queries against the inventory database for product information, stock levels, and pricing.
+  </Card>
+  
+  <Card title="search_knowledge_base" icon="book">
+    Performs semantic search using embeddings to retrieve relevant policy documents and company information.
+  </Card>
+</CardGroup>
+
+### Technical Stack
+
+<Tabs>
+  <Tab title="Python">
+    - **LLM Provider**: OpenAI (gpt-5-nano model)
+    - **Tracing**: LangSmith for observability
+    - **Database**: SQLite3 for product inventory
+    - **Embeddings**: text-embedding-3-small for RAG
+    - **Vector Store**: In-memory with NumPy
+  </Tab>
+  
+  <Tab title="TypeScript">
+    - **LLM Provider**: OpenAI (gpt-5-nano model)
+    - **Tracing**: LangSmith for observability
+    - **Database**: better-sqlite3 for product inventory
+    - **Embeddings**: text-embedding-3-small for RAG
+    - **Vector Store**: In-memory with custom cosine similarity
+  </Tab>
+</Tabs>
+
+## Agent Evolution
+
+The OfficeFlow agent went through multiple iterations, each addressing specific production challenges:
+
+- **v0**: Basic implementation with no observability
+- **v1**: Added LangSmith tracing for debugging
+- **v2**: Enhanced tool descriptions to fix schema discovery
+- **v3**: Added stock quantity communication policy
+- **v4**: Implemented RAG with full document retrieval
+- **v5**: Added conciseness directive to reduce verbosity
+
+Each version teaches important lessons about building reliable agents in production. See the [Agent Versions](/agents/agent-versions) page for detailed progression.
+
+## System Prompt Structure
+
+The agent's system prompt follows a clear structure:
+
+1. **Role & Persona** - Who Emma is and her background
+2. **Capabilities** - What she can help with
+3. **Boundaries** - What she cannot handle
+4. **Communication Style** - How to interact with customers
+5. **Critical Instructions** - Key behavioral guidelines (check database first, stock policy, etc.)
+6. **Tools** - Descriptions of available functions
+7. **Examples** - Sample interactions demonstrating expected behavior
+
+This structure ensures the agent has clear context while maintaining appropriate boundaries.
+
+## Running the Agent
+
+<Tabs>
+  <Tab title="Python">
+    ```bash
+    cd source/python/officeflow-agent
+    python agent_v5.py
+    ```
+  </Tab>
+  
+  <Tab title="TypeScript">
+    ```bash
+    cd source/ts/officeflow-agent
+    npx tsx agent_v5.ts
+    ```
+  </Tab>
+</Tabs>
+
+The agent will:
+1. Load the knowledge base and generate/cache embeddings
+2. Start an interactive chat session
+3. Display the thread ID for tracing in LangSmith
+4. Accept user input until you type 'quit' or 'exit'
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Agent Versions" icon="timeline" href="/agents/agent-versions">
+    Explore the progressive improvements from v0 to v5
+  </Card>
+  
+  <Card title="Analyzing Agents" icon="chart-line" href="/agents/analyzing-agents">
+    Learn how to analyze agent behavior using traces
+  </Card>
+</CardGroup>

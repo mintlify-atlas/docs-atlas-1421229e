@@ -1,0 +1,195 @@
+---
+title: Creating Test Datasets
+description: Build robust test datasets for systematic agent evaluation
+---
+
+Test datasets are the foundation of reliable agent evaluation. They provide consistent, repeatable inputs that let you measure your agent's performance over time and detect regressions as you iterate.
+
+## Why Datasets Matter
+
+Datasets enable you to:
+
+- **Track performance** across agent versions
+- **Catch regressions** before deploying changes
+- **Benchmark systematically** against production scenarios
+- **Share evaluation criteria** with your team
+
+<Note>
+Start with 10-25 examples covering your core use cases. You can expand the dataset as you discover edge cases through production traces.
+</Note>
+
+## Dataset Structure
+
+A dataset is a collection of test cases, where each case typically contains:
+
+- **Input**: The user question or scenario
+- **Expected Output** (optional): Reference answer or behavior
+- **Metadata** (optional): Tags, difficulty level, scenario type
+
+### Simple CSV Format
+
+The easiest way to start is with a CSV file:
+
+```csv officeflow-dataset.csv
+question
+How many reams of copy paper do you currently have available?
+I need spiral notebooks for my team — can you tell me how many 3-packs you have right now?
+Do you carry ballpoint pens?
+I've been trying to order copy paper all week and your website keeps crashing. Just tell me — do you even have any left and how much does it cost?
+Can you check if you have spiral notebooks AND staplers in stock?
+What is your return policy? How long do I have to return something?
+I placed an order yesterday and realized I put the wrong address. Can you change it? What are my options?
+```
+
+## Creating Datasets in LangSmith
+
+<Steps>
+
+### Upload via UI
+
+1. Navigate to **Datasets** in LangSmith
+2. Click **New Dataset**
+3. Name your dataset (e.g., `officeflow-dataset`)
+4. Upload your CSV file
+5. Map columns to input fields
+
+### Create Programmatically
+
+You can also create datasets using the LangSmith SDK:
+
+```python create_dataset.py
+from langsmith import Client
+
+client = Client()
+
+# Create dataset
+dataset = client.create_dataset(
+    dataset_name="officeflow-dataset",
+    description="Customer support queries for OfficeFlow"
+)
+
+# Add examples
+examples = [
+    {
+        "inputs": {"question": "How many reams of copy paper do you have?"},
+        "outputs": {"expected_tool": "query_database"}
+    },
+    {
+        "inputs": {"question": "What is your return policy?"},
+        "outputs": {"expected_tool": "search_knowledge_base"}
+    }
+]
+
+for example in examples:
+    client.create_example(
+        dataset_id=dataset.id,
+        inputs=example["inputs"],
+        outputs=example.get("outputs")
+    )
+```
+
+### Import from Production Traces
+
+Leverage real user interactions:
+
+```python import_from_traces.py
+from langsmith import Client
+
+client = Client()
+
+# Find interesting traces
+runs = client.list_runs(
+    project_name="production",
+    filter='eq(feedback_key, "user_rating") and gte(feedback_score, 4)'
+)
+
+# Add to dataset
+for run in runs:
+    client.create_example(
+        dataset_id=dataset_id,
+        inputs=run.inputs,
+        outputs=run.outputs
+    )
+```
+
+</Steps>
+
+## Best Practices
+
+### Cover Core Scenarios
+
+Ensure your dataset includes:
+
+- **Happy path queries** - Straightforward requests your agent should handle easily
+- **Edge cases** - Ambiguous, multi-part, or unusual requests
+- **Error scenarios** - Invalid inputs, out-of-scope questions
+- **Complex workflows** - Multi-step interactions requiring multiple tools
+
+### Example Categories for OfficeFlow
+
+```python dataset_categories.py
+categories = {
+    "inventory_queries": [
+        "How many reams of copy paper do you have?",
+        "Do you carry staplers?"
+    ],
+    "policy_questions": [
+        "What is your return policy?",
+        "What payment methods do you accept?"
+    ],
+    "frustrated_customers": [
+        "I've been trying to order copy paper all week and your website keeps crashing.",
+        "This is the THIRD time I've called about my lost package."
+    ],
+    "multi_part_requests": [
+        "Can you check if you have spiral notebooks AND staplers in stock?",
+        "What's the price on blue pens and do you offer free shipping?"
+    ]
+}
+```
+
+### Add Reference Outputs
+
+While not required, reference outputs help with evaluation:
+
+```python with_expected_outputs.py
+examples = [
+    {
+        "inputs": {"question": "How many reams of copy paper do you have?"},
+        "outputs": {
+            "expected_answer": "We currently have 50 reams of copy paper in stock.",
+            "should_use_tool": "query_database",
+            "should_check_schema": True
+        }
+    }
+]
+```
+
+## Using Your Dataset
+
+Once created, reference your dataset by name in experiments:
+
+```python run_experiment.py
+from langsmith import evaluate
+
+results = evaluate(
+    your_agent,
+    data="officeflow-dataset",  # Reference by name
+    evaluators=[...]
+)
+```
+
+<Note>
+Datasets are versioned in LangSmith. You can update examples without breaking existing experiments.
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Run Experiments" icon="flask" href="/evaluation/experiments">
+    Connect your dataset to evaluators
+  </Card>
+  <Card title="Code-based Eval" icon="code" href="/evaluation/code-based">
+    Write deterministic evaluators
+  </Card>
+</CardGroup>

@@ -1,0 +1,402 @@
+---
+title: 'Agent Implementation'
+description: 'Python agent implementation reference for building conversational AI agents with tool calling and conversation history'
+---
+
+## Overview
+
+This reference documents the core agent implementation patterns used throughout the Building Reliable Agents course. The implementations demonstrate how to build conversational AI agents using OpenAI's Chat Completions API with tool calling capabilities.
+
+## Basic Agent Pattern
+
+The simplest agent implementation accepts a question and returns a response.
+
+### `agent()`
+
+Basic agent function with tool calling support.
+
+<ParamField path="question" type="str" required>
+  User's question or input message
+</ParamField>
+
+<ResponseField name="output" type="str">
+  The agent's final response message
+</ResponseField>
+
+<ResponseField name="messages" type="list[dict]">
+  Complete conversation history including:
+  - User messages
+  - Assistant messages
+  - Tool calls and results
+</ResponseField>
+
+**Example:**
+
+```python
+from openai import OpenAI
+from langsmith.wrappers import wrap_openai
+from langsmith import traceable
+
+client = wrap_openai(OpenAI())
+
+@traceable(run_type="tool")
+def weather_retriever():
+    """Retrieve current weather information."""
+    return "It is sunny today"
+
+WEATHER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "weather_retriever",
+        "description": "Get the current weather conditions",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    }
+}
+
+@traceable
+def agent(question: str) -> dict:
+    messages = [{"role": "user", "content": question}]
+    
+    # First API call with tool available
+    response = client.chat.completions.create(
+        model="gpt-4",
+        messages=messages,
+        tools=[WEATHER_TOOL],
+        tool_choice="auto"
+    )
+    
+    response_message = response.choices[0].message
+    
+    # Handle tool calls if the model wants to use them
+    if response_message.tool_calls:
+        # Add assistant's tool call to messages
+        messages.append({
+            "role": "assistant",
+            "content": response_message.content or "",
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": tc.type,
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments
+                    }
+                }
+                for tc in response_message.tool_calls
+            ]
+        })
+        
+        # Execute the tool call(s)
+        for tool_call in response_message.tool_calls:
+            if tool_call.function.name == "weather_retriever":
+                result = weather_retriever()
+                
+                # Add tool result to messages
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "name": "weather_retriever",
+                    "content": result
+                })
+        
+        # Make second API call with tool results
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=messages,
+            tools=[WEATHER_TOOL],
+            tool_choice="auto"
+        )
+        response_message = response.choices[0].message
+    
+    messages.append({"role": "assistant", "content": response_message.content})
+    return {"messages": messages, "output": response_message.content}
+```
+
+## Conversational Agent with Thread History
+
+Agents that maintain conversation history across multiple turns.
+
+### `chat_pipeline()`
+
+Agent function with persistent conversation history using thread storage.
+
+<ParamField path="messages" type="list[dict]" required>
+  New messages to add to the conversation. Each message should have:
+  - `role`: "user" or "assistant"
+  - `content`: The message text
+</ParamField>
+
+<ResponseField name="messages" type="list[dict]">
+  Complete conversation history including all previous messages and the new response
+</ResponseField>
+
+**Thread Management Functions:**
+
+### `get_thread_history()`
+
+Retrieve conversation history for a specific thread.
+
+<ParamField path="thread_id" type="str" required>
+  Unique identifier for the conversation thread
+</ParamField>
+
+<ResponseField name="history" type="list[dict]">
+  List of all messages in the thread
+</ResponseField>
+
+### `save_thread_history()`
+
+Save conversation history for a thread.
+
+<ParamField path="thread_id" type="str" required>
+  Unique identifier for the conversation thread
+</ParamField>
+
+<ParamField path="messages" type="list[dict]" required>
+  Complete message history to save
+</ParamField>
+
+**Example:**
+
+```python
+from openai import OpenAI
+from langsmith import traceable, uuid7
+from langsmith.wrappers import wrap_openai
+
+client = wrap_openai(OpenAI())
+
+# Configuration
+THREAD_ID = str(uuid7())
+
+# Conversation history store (use a database in production)
+thread_store: dict[str, list] = {}
+
+def get_thread_history(thread_id: str) -> list:
+    return thread_store.get(thread_id, [])
+
+def save_thread_history(thread_id: str, messages: list):
+    thread_store[thread_id] = messages
+
+@traceable(name="Name Agent", metadata={"thread_id": THREAD_ID})
+def chat_pipeline(messages: list):
+    # Automatically fetch history if it exists
+    history_messages = get_thread_history(THREAD_ID)
+    
+    # Combine history with new messages
+    all_messages = history_messages + messages
+    
+    # Invoke the model
+    chat_completion = client.chat.completions.create(
+        model="gpt-4",
+        messages=all_messages
+    )
+    
+    # Save and return the complete conversation
+    response_message = chat_completion.choices[0].message
+    full_conversation = all_messages + [
+        {"role": response_message.role, "content": response_message.content}
+    ]
+    save_thread_history(THREAD_ID, full_conversation)
+    
+    return {"messages": full_conversation}
+
+# Usage
+messages = [{"content": "Hi, my name is Sally", "role": "user"}]
+result = chat_pipeline(messages)
+print(result["messages"][-1])
+
+# Follow up - agent remembers the name
+messages = [{"content": "What's my name?", "role": "user"}]
+result = chat_pipeline(messages)
+print(result["messages"][-1])
+```
+
+## Advanced Agent with Multiple Tools
+
+### `chat()`
+
+Full-featured async agent with multiple tools and conversation history.
+
+<ParamField path="question" type="str" required>
+  User's question or input message
+</ParamField>
+
+<ResponseField name="messages" type="list[dict]">
+  Complete conversation history including system prompt, user messages, assistant responses, and tool calls
+</ResponseField>
+
+<ResponseField name="output" type="str">
+  The agent's final response message
+</ResponseField>
+
+**Features:**
+- Async/await support for concurrent operations
+- Multiple tool support (database queries, knowledge base search)
+- System prompt with detailed instructions
+- Conversation history management
+- Agentic tool calling loop (continues until no more tool calls)
+
+**Example:**
+
+```python
+import asyncio
+import json
+from openai import AsyncOpenAI
+from langsmith import traceable, uuid7
+from langsmith.wrappers import wrap_openai
+
+client = wrap_openai(AsyncOpenAI())
+thread_id = str(uuid7())
+thread_store: dict[str, list] = {}
+
+system_prompt = """You are a helpful assistant with access to tools."""
+
+@traceable(name="Agent", metadata={"thread_id": thread_id})
+async def chat(question: str) -> dict:
+    """Process a user question and return assistant response."""
+    tools = [QUERY_DATABASE_TOOL, SEARCH_KNOWLEDGE_BASE_TOOL]
+    
+    # Fetch conversation history
+    history_messages = thread_store.get(thread_id, [])
+    
+    # Build messages with history
+    messages = [
+        {"role": "system", "content": system_prompt}
+    ] + history_messages + [
+        {"role": "user", "content": question}
+    ]
+    
+    # First API call with tools
+    response = await client.chat.completions.create(
+        model="gpt-4",
+        messages=messages,
+        tools=tools,
+        tool_choice="auto"
+    )
+    
+    response_message = response.choices[0].message
+    
+    # Handle tool calls in a loop until no more tool calls
+    while response_message.tool_calls:
+        # Add assistant's tool call to messages
+        messages.append({
+            "role": "assistant",
+            "content": response_message.content or "",
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": tc.type,
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments
+                    }
+                }
+                for tc in response_message.tool_calls
+            ]
+        })
+        
+        # Execute the tool call(s)
+        for tool_call in response_message.tool_calls:
+            function_args = json.loads(tool_call.function.arguments)
+            
+            # Route to appropriate tool
+            if tool_call.function.name == "query_database":
+                result = query_database(**function_args)
+            elif tool_call.function.name == "search_knowledge_base":
+                result = await search_knowledge_base(**function_args)
+            else:
+                result = f"Error: Unknown tool {tool_call.function.name}"
+            
+            # Add tool result to messages
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "name": tool_call.function.name,
+                "content": result
+            })
+        
+        # Make next API call with tool results
+        response = await client.chat.completions.create(
+            model="gpt-4",
+            messages=messages,
+            tools=tools,
+            tool_choice="auto"
+        )
+        response_message = response.choices[0].message
+    
+    # Add final response to messages
+    final_content = response_message.content
+    messages.append({
+        "role": "assistant",
+        "content": final_content
+    })
+    
+    # Save conversation history (everything except system prompt)
+    thread_store[thread_id] = messages[1:]
+    
+    return {"messages": messages, "output": final_content}
+
+# Usage
+async def main():
+    result = await chat("What products do you have?")
+    print(result["output"])
+
+asyncio.run(main())
+```
+
+## Best Practices
+
+### LangSmith Tracing
+
+Always use the `@traceable` decorator for observability:
+
+```python
+from langsmith import traceable
+
+@traceable(name="MyAgent", metadata={"version": "v1"})
+def agent(question: str):
+    # Your agent logic
+    pass
+```
+
+### Error Handling
+
+Handle tool execution errors gracefully:
+
+```python
+try:
+    result = tool_function(**args)
+except Exception as e:
+    result = f"Error executing tool: {str(e)}"
+```
+
+### Thread Management
+
+In production, use a database instead of in-memory storage:
+
+```python
+# Development: In-memory
+thread_store: dict[str, list] = {}
+
+# Production: Use a database
+# thread_store = DatabaseThreadStore()
+```
+
+### System Prompts
+
+Keep system prompts separate and version controlled:
+
+```python
+# Load from file or config
+with open("system_prompt.txt") as f:
+    system_prompt = f.read()
+```
+
+## Related
+
+- [Tool Functions](/api/python/tools) - Database and knowledge base tools
+- [Evaluators](/api/python/evaluators) - Testing and evaluation functions

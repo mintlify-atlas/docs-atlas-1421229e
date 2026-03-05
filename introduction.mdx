@@ -1,0 +1,246 @@
+---
+title: "Building Reliable Agents"
+description: "Master the art of building, observing, evaluating, and deploying production-ready AI agents with LangSmith"
+mode: "custom"
+---
+
+<div className="relative overflow-hidden bg-gradient-to-br from-[#1E40AF] via-[#1E3A8A] to-[#0F172A] dark:from-[#0F172A] dark:via-[#1E3A8A] dark:to-[#1E40AF]">
+  <div className="absolute inset-0 bg-[url('/grid.svg')] opacity-10"></div>
+  <div className="relative py-20 px-6 sm:px-8 lg:px-12">
+    <div className="max-w-7xl mx-auto">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-center">
+        <div className="lg:col-span-7">
+          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold text-white mb-6">
+            Build Reliable AI Agents
+          </h1>
+          <p className="text-lg sm:text-xl text-gray-200 dark:text-gray-300 mb-8 max-w-2xl">
+            Learn to build production-ready AI agents with comprehensive observability, automated evaluation, and real-world deployment strategies using LangSmith.
+          </p>
+          <div className="flex flex-wrap gap-4">
+            <a 
+              href="/setup/python" 
+              className="inline-flex items-center px-6 py-3 rounded-lg bg-white text-[#1E40AF] font-semibold hover:bg-gray-100 transition-colors shadow-lg"
+            >
+              Get Started
+              <svg className="ml-2 w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+              </svg>
+            </a>
+            <a 
+              href="/concepts/observability" 
+              className="inline-flex items-center px-6 py-3 rounded-lg border border-white/30 bg-white/10 text-white font-semibold hover:bg-white/20 transition-colors backdrop-blur-sm"
+            >
+              Core Concepts
+            </a>
+          </div>
+        </div>
+        <div className="lg:col-span-5 hidden lg:block">
+          <div className="relative">
+            <div className="absolute inset-0 bg-gradient-to-tr from-[#3B82F6]/20 to-transparent rounded-2xl blur-3xl"></div>
+            <div className="relative bg-[#0f1117]/80 dark:bg-[#1a1d27]/80 backdrop-blur-xl rounded-2xl border border-white/10 p-6">
+              <div className="space-y-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-3 h-3 rounded-full bg-green-400"></div>
+                  <div className="text-sm text-gray-300">Agent v5 running...</div>
+                </div>
+                <div className="bg-[#1a1d27]/50 dark:bg-[#0f1117]/50 rounded-lg p-4 font-mono text-sm text-gray-300">
+                  <div className="text-[#3B82F6]">→</div> Tracing enabled
+                  <br />
+                  <div className="text-[#3B82F6]">→</div> Evaluation active
+                  <br />
+                  <div className="text-green-400">✓</div> Production ready
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <div className="mb-12">
+    <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">Quick Start</h2>
+    <p className="text-base text-gray-600 dark:text-gray-400">Get up and running with your first reliable agent in minutes</p>
+  </div>
+
+  <Steps>
+    <Step title="Install Dependencies">
+      Choose your preferred language and install the required packages.
+      
+      <CodeGroup>
+      ```bash Python (uv)
+      git clone --depth 1 https://github.com/langchain-ai/lca-reliable-agents.git
+      cd lca-reliable-agents/python
+      uv sync
+      ```
+      
+      ```bash TypeScript
+      git clone --depth 1 https://github.com/langchain-ai/lca-reliable-agents.git
+      cd lca-reliable-agents/ts
+      npm install
+      ```
+      </CodeGroup>
+    </Step>
+
+    <Step title="Configure API Keys">
+      Set up your environment variables with your OpenAI and LangSmith API keys.
+      
+      ```bash .env
+      OPENAI_API_KEY='your_openai_api_key_here'
+      LANGSMITH_API_KEY='your_langsmith_api_key_here'
+      LANGSMITH_TRACING=true
+      LANGSMITH_PROJECT=lca-reliable-agents
+      ```
+      
+      <Note>
+      Get your [OpenAI API key](https://openai.com/index/openai-api/) and create a free [LangSmith account](https://smith.langchain.com/) to get your LangSmith API key.
+      </Note>
+    </Step>
+
+    <Step title="Run Your First Agent">
+      Start the OfficeFlow customer support agent with full tracing enabled.
+      
+      <CodeGroup>
+      ```bash Python
+      uv run python officeflow-agent/agent_v5.py
+      ```
+      
+      ```bash TypeScript
+      npx tsx officeflow-agent/agent_v5.ts
+      ```
+      </CodeGroup>
+      
+      The agent will start an interactive session where you can ask questions about products, inventory, and company policies.
+    </Step>
+
+    <Step title="View Traces in LangSmith">
+      Open [LangSmith](https://smith.langchain.com/) and navigate to your project to see detailed traces of every agent interaction, including LLM calls, tool usage, and decision paths.
+    </Step>
+  </Steps>
+</div>
+
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <div className="mb-12">
+    <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">What You'll Learn</h2>
+    <p className="text-base text-gray-600 dark:text-gray-400">Master every aspect of building production-ready AI agents</p>
+  </div>
+
+  <CardGroup cols={3}>
+    <Card title="Observability" icon="eye" href="/concepts/observability">
+      Learn why traditional debugging falls short and how to instrument agents with comprehensive tracing.
+    </Card>
+    <Card title="Agent Development" icon="robot" href="/agents/officeflow-overview">
+      Build the OfficeFlow customer support agent from scratch with progressive improvements.
+    </Card>
+    <Card title="Evaluation Methods" icon="vials" href="/evaluation/experiments">
+      Master code-based evals, LLM-as-judge, and pairwise comparison techniques.
+    </Card>
+    <Card title="Tracing" icon="route" href="/concepts/tracing">
+      Capture every LLM call, tool invocation, and decision in detailed execution traces.
+    </Card>
+    <Card title="Dataset Creation" icon="database" href="/evaluation/datasets">
+      Build robust test datasets for repeatable evaluation and regression testing.
+    </Card>
+    <Card title="Production Deployment" icon="rocket" href="/production/overview">
+      Scale your agents to production with trace upload and online evaluation.
+    </Card>
+  </CardGroup>
+</div>
+
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <div className="mb-12">
+    <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">Course Structure</h2>
+    <p className="text-base text-gray-600 dark:text-gray-400">Three comprehensive modules covering the full agent development lifecycle</p>
+  </div>
+
+  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+    <a href="/concepts/observability" className="group block rounded-2xl border border-gray-200 dark:border-[#27272a] hover:border-[#1E40AF] dark:hover:border-[#3B82F6] overflow-hidden no-underline transition-colors bg-white dark:bg-[#1a1d27]">
+      <div className="p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 rounded-lg bg-[#1E40AF]/10 dark:bg-[#3B82F6]/10 flex items-center justify-center">
+            <span className="text-xl font-bold text-[#1E40AF] dark:text-[#3B82F6]">1</span>
+          </div>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 m-0">Observation</h3>
+        </div>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+          Learn observability fundamentals, LangSmith tracing, and systematic agent analysis techniques.
+        </p>
+        <div className="flex items-center text-sm font-medium text-[#1E40AF] dark:text-[#3B82F6] group-hover:gap-2 transition-all">
+          Explore Module 1
+          <svg className="w-4 h-4 ml-1 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        </div>
+      </div>
+    </a>
+
+    <a href="/evaluation/datasets" className="group block rounded-2xl border border-gray-200 dark:border-[#27272a] hover:border-[#1E40AF] dark:hover:border-[#3B82F6] overflow-hidden no-underline transition-colors bg-white dark:bg-[#1a1d27]">
+      <div className="p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 rounded-lg bg-[#1E40AF]/10 dark:bg-[#3B82F6]/10 flex items-center justify-center">
+            <span className="text-xl font-bold text-[#1E40AF] dark:text-[#3B82F6]">2</span>
+          </div>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 m-0">Evaluation</h3>
+        </div>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+          Master dataset creation, experiment running, and multiple evaluation methodologies for agent quality.
+        </p>
+        <div className="flex items-center text-sm font-medium text-[#1E40AF] dark:text-[#3B82F6] group-hover:gap-2 transition-all">
+          Explore Module 2
+          <svg className="w-4 h-4 ml-1 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        </div>
+      </div>
+    </a>
+
+    <a href="/production/overview" className="group block rounded-2xl border border-gray-200 dark:border-[#27272a] hover:border-[#1E40AF] dark:hover:border-[#3B82F6] overflow-hidden no-underline transition-colors bg-white dark:bg-[#1a1d27]">
+      <div className="p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 rounded-lg bg-[#1E40AF]/10 dark:bg-[#3B82F6]/10 flex items-center justify-center">
+            <span className="text-xl font-bold text-[#1E40AF] dark:text-[#3B82F6]">3</span>
+          </div>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 m-0">Production</h3>
+        </div>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+          Deploy agents with confidence using trace upload, online evaluation, and automated insights at scale.
+        </p>
+        <div className="flex items-center text-sm font-medium text-[#1E40AF] dark:text-[#3B82F6] group-hover:gap-2 transition-all">
+          Explore Module 3
+          <svg className="w-4 h-4 ml-1 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        </div>
+      </div>
+    </a>
+  </div>
+</div>
+
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <div className="rounded-2xl bg-gradient-to-br from-[#1E40AF]/10 to-[#1E3A8A]/10 dark:from-[#1E40AF]/20 dark:to-[#1E3A8A]/20 border border-[#1E40AF]/20 dark:border-[#3B82F6]/20 p-8 sm:p-12">
+    <div className="max-w-3xl">
+      <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-4">
+        Ready to Build Reliable Agents?
+      </h2>
+      <p className="text-base text-gray-600 dark:text-gray-400 mb-6">
+        Start with the Python or TypeScript setup guide and build your first production-ready AI agent with comprehensive observability and evaluation.
+      </p>
+      <div className="flex flex-wrap gap-4">
+        <a 
+          href="/setup/python"
+          className="inline-flex items-center px-6 py-3 rounded-lg bg-[#1E40AF] hover:bg-[#1E3A8A] text-white font-semibold transition-colors"
+        >
+          Python Setup
+        </a>
+        <a 
+          href="/setup/typescript"
+          className="inline-flex items-center px-6 py-3 rounded-lg border border-[#1E40AF] dark:border-[#3B82F6] text-[#1E40AF] dark:text-[#3B82F6] hover:bg-[#1E40AF]/10 dark:hover:bg-[#3B82F6]/10 font-semibold transition-colors"
+        >
+          TypeScript Setup
+        </a>
+      </div>
+    </div>
+  </div>
+</div>

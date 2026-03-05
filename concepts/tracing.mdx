@@ -1,0 +1,447 @@
+---
+title: LangSmith Tracing Fundamentals
+description: Learn how to instrument your AI agents with LangSmith tracing to capture every LLM call, tool invocation, and decision
+---
+
+## What is Tracing?
+
+Tracing captures the complete execution flow of your AI agent as a hierarchical tree of operations. Each node in the tree represents a "run"—an LLM call, a tool execution, or a custom function you want to observe.
+
+Think of tracing like a detailed flight recorder for your agent. It doesn't just log what happened; it captures:
+
+- **Inputs and outputs** at every step
+- **Timing and latency** for performance analysis
+- **Parent-child relationships** showing how operations nest
+- **Metadata and tags** for filtering and organization
+- **Errors and exceptions** with full context
+
+## Setting Up LangSmith Tracing
+
+### 1. Get Your API Key
+
+First, create a LangSmith account at [smith.langchain.com](https://smith.langchain.com) and generate an API key.
+
+### 2. Configure Environment Variables
+
+Add these to your `.env` file:
+
+```bash
+LANGSMITH_API_KEY="your_api_key_here"
+LANGSMITH_TRACING=true
+LANGSMITH_PROJECT="your-project-name"
+```
+
+<Tip>
+Use different project names for different environments (e.g., `my-agent-dev`, `my-agent-staging`, `my-agent-prod`) to keep traces organized.
+</Tip>
+
+### 3. Install Required Packages
+
+```bash
+pip install langsmith openai
+```
+
+## Instrumenting Your Agent
+
+Let's see how to add tracing to a real agent. Here's the evolution from `agent_v0.py` (no tracing) to `agent_v1.py` (with tracing):
+
+### Before: No Tracing
+
+```python
+import os
+from dotenv import load_dotenv
+from openai import AsyncOpenAI
+
+load_dotenv()
+
+client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+async def chat(question: str) -> str:
+    """Process a user question and return assistant response."""
+    messages = [{"role": "user", "content": question}]
+    
+    response = await client.chat.completions.create(
+        model="gpt-5-nano",
+        messages=messages
+    )
+    
+    return response.choices[0].message.content
+```
+
+### After: With LangSmith Tracing
+
+```python
+import os
+from dotenv import load_dotenv
+from openai import AsyncOpenAI
+from langsmith import traceable
+from langsmith.wrappers import wrap_openai
+
+load_dotenv()
+
+# Wrap the OpenAI client to automatically trace all LLM calls
+client = wrap_openai(AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY")))
+
+# Add @traceable decorator to create a trace for the entire chat function
+@traceable(name="chat", run_type="chain")
+async def chat(question: str) -> str:
+    """Process a user question and return assistant response."""
+    messages = [{"role": "user", "content": question}]
+    
+    response = await client.chat.completions.create(
+        model="gpt-5-nano",
+        messages=messages
+    )
+    
+    return response.choices[0].message.content
+```
+
+<Card title="Two Simple Changes" icon="magic">
+1. Wrap your OpenAI client with `wrap_openai()` to auto-trace LLM calls
+2. Add `@traceable` decorator to functions you want to trace
+</Card>
+
+That's it! Now every call to `chat()` creates a trace in LangSmith showing:
+- The user's question
+- The messages sent to the model
+- The model's response
+- Token usage and latency
+- Any errors that occurred
+
+## Tracing Tools and Custom Functions
+
+When your agent uses tools, you want to trace those too. Here's how the OfficeFlow agent traces its database queries:
+
+### Tracing Tool Calls
+
+```python
+from langsmith import traceable
+import sqlite3
+
+@traceable(name="query_database", run_type="tool")
+def query_database(query: str, db_path: str) -> str:
+    """Execute SQL query against the inventory database."""
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute(query)
+        results = cursor.fetchall()
+        conn.close()
+        return str(results)
+    except Exception as e:
+        return f"Error: {str(e)}"
+```
+
+### Tracing Knowledge Base Search
+
+```python
+@traceable(name="search_knowledge_base", run_type="tool")
+async def search_knowledge_base(query: str, top_k: int = 2) -> str:
+    """Search knowledge base using semantic similarity."""
+    # Generate embedding for query
+    response = await client.embeddings.create(
+        model="text-embedding-3-small",
+        input=query
+    )
+    query_embedding = response.data[0].embedding
+    
+    # Calculate similarity and return top results
+    # ... (similarity calculation code)
+    
+    return "\n".join(results)
+```
+
+Now when you look at a trace in LangSmith, you'll see:
+
+```
+📊 chat (chain) - 2.3s
+├── 🤖 ChatOpenAI (llm) - 0.8s
+│   ├── Input: "Do you have printer paper?"
+│   └── Output: [tool_call: query_database]
+├── 🔧 query_database (tool) - 0.1s
+│   ├── Input: "SELECT * FROM products WHERE name LIKE '%paper%'"
+│   └── Output: [("Premium Copy Paper", 450, 24.99), ...]
+└── 🤖 ChatOpenAI (llm) - 1.2s
+    ├── Input: [previous messages + tool result]
+    └── Output: "Yes, we have several printer paper options..."
+```
+
+## Run Types Explained
+
+The `run_type` parameter categorizes your traces:
+
+<CardGroup cols={3}>
+  <Card title="llm" icon="brain">
+    Direct calls to language models (usually auto-traced by `wrap_openai`)
+  </Card>
+  
+  <Card title="chain" icon="link">
+    Sequences of operations, orchestration logic, or main entry points
+  </Card>
+  
+  <Card title="tool" icon="wrench">
+    Tool executions like database queries, API calls, or retrieval operations
+  </Card>
+  
+  <Card title="retriever" icon="magnifying-glass">
+    Specialized retrieval operations like vector database searches
+  </Card>
+  
+  <Card title="embedding" icon="vector-square">
+    Embedding generation (also auto-traced when using wrapped clients)
+  </Card>
+  
+  <Card title="agent" icon="robot">
+    High-level agent execution (alternative to "chain" for agent entry points)
+  </Card>
+</CardGroup>
+
+<Tip>
+Use consistent run types across your codebase. This makes filtering and analysis much easier in the LangSmith UI.
+</Tip>
+
+## Adding Metadata and Tags
+
+Enrich your traces with context:
+
+```python
+from langsmith import traceable, uuid7
+
+thread_id = str(uuid7())
+
+@traceable(
+    name="Emma",
+    run_type="chain",
+    metadata={"thread_id": thread_id, "version": "v1"}
+)
+async def chat(question: str) -> str:
+    # Your agent logic here
+    pass
+```
+
+You can also add tags programmatically:
+
+```python
+from langsmith import traceable
+
+@traceable
+async def chat(question: str) -> str:
+    # Tags help filter traces in the UI
+    tags = ["production", "customer-support"]
+    
+    # Add customer context if available
+    if "urgent" in question.lower():
+        tags.append("urgent")
+    
+    # Your logic here
+    pass
+```
+
+## Real-World Example: Tracing an Agent with Tools
+
+Here's a simplified version of the OfficeFlow agent showing complete instrumentation:
+
+```python
+from openai import AsyncOpenAI
+from langsmith import traceable, uuid7
+from langsmith.wrappers import wrap_openai
+import json
+
+client = wrap_openai(AsyncOpenAI())
+thread_id = str(uuid7())
+
+@traceable(name="query_database", run_type="tool")
+def query_database(query: str, db_path: str) -> str:
+    """Execute SQL query against the inventory database."""
+    # Database logic here
+    pass
+
+@traceable(name="Emma", metadata={"thread_id": thread_id})
+async def chat(question: str) -> str:
+    """Process a user question and return assistant response."""
+    tools = [QUERY_DATABASE_TOOL]  # Tool schema definition
+    
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": question}
+    ]
+    
+    # First LLM call - auto-traced by wrap_openai
+    response = await client.chat.completions.create(
+        model="gpt-5-nano",
+        messages=messages,
+        tools=tools
+    )
+    
+    response_message = response.choices[0].message
+    
+    # Handle tool calls
+    if response_message.tool_calls:
+        for tool_call in response_message.tool_calls:
+            function_args = json.loads(tool_call.function.arguments)
+            
+            # This call is traced because of the @traceable decorator
+            result = query_database(
+                query=function_args.get("query"),
+                db_path=db_path
+            )
+            
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "content": result
+            })
+        
+        # Second LLM call with tool results - also auto-traced
+        response = await client.chat.completions.create(
+            model="gpt-5-nano",
+            messages=messages
+        )
+    
+    return response.choices[0].message.content
+```
+
+This creates a beautiful hierarchical trace showing:
+- The main `chat` function execution
+- First LLM call to decide on tool usage
+- Tool execution (`query_database`)
+- Second LLM call with tool results
+- Final response to the user
+
+## Viewing Traces in LangSmith
+
+Once your agent is instrumented:
+
+1. Run your agent normally
+2. Visit [smith.langchain.com](https://smith.langchain.com)
+3. Navigate to your project
+4. Click on any trace to see the detailed execution tree
+
+You can:
+- Expand/collapse nodes to focus on specific parts
+- View inputs and outputs at each level
+- See timing information for performance analysis
+- Share trace URLs with teammates for debugging
+- Filter by metadata, tags, or run type
+
+<Tip>
+**Pro tip**: When debugging, add the LangSmith trace URL to your issue tracker. This gives you and your team the exact context needed to investigate problems.
+</Tip>
+
+## Common Patterns
+
+### Pattern 1: Tracing Third-Party Agents
+
+Even simple agents benefit from tracing:
+
+```python
+from openai import OpenAI
+from langsmith.wrappers import wrap_openai
+from langsmith import traceable
+
+client = wrap_openai(OpenAI())
+
+@traceable(run_type="tool")
+def weather_retriever():
+    """Retrieve current weather information."""
+    return "It is sunny today"
+
+@traceable
+def agent(question: str) -> str:
+    messages = [{"role": "user", "content": question}]
+    
+    response = client.chat.completions.create(
+        model="gpt-5-nano",
+        messages=messages,
+        tools=[WEATHER_TOOL]
+    )
+    
+    # Handle tool calling logic...
+    return final_response
+```
+
+### Pattern 2: Tracing Conversational Agents
+
+For agents with conversation history:
+
+```python
+thread_store: dict[str, list] = {}
+
+@traceable(metadata={"thread_id": thread_id})
+async def chat(question: str, thread_id: str) -> str:
+    # Fetch conversation history
+    history = thread_store.get(thread_id, [])
+    
+    messages = [
+        {"role": "system", "content": system_prompt}
+    ] + history + [
+        {"role": "user", "content": question}
+    ]
+    
+    # Process with full context...
+```
+
+The `thread_id` metadata lets you filter traces by conversation in the UI.
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Trace Entry Points" icon="door-open">
+    Always trace your main agent function—this creates the root node that contains all other operations.
+  </Card>
+  
+  <Card title="Trace Tools" icon="hammer">
+    Every tool should be traced so you can see exactly what arguments were passed and what was returned.
+  </Card>
+  
+  <Card title="Use Descriptive Names" icon="tag">
+    Name traces after their purpose: "query_database", "search_knowledge", not "function_1", "helper_2".
+  </Card>
+  
+  <Card title="Add Context with Metadata" icon="info-circle">
+    Include user IDs, session IDs, version numbers, or any context that helps you filter and analyze traces later.
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+### Traces Not Appearing?
+
+Check these common issues:
+
+1. **Environment variables**: Verify `LANGSMITH_TRACING=true` and `LANGSMITH_API_KEY` are set
+2. **Project name**: Ensure `LANGSMITH_PROJECT` is configured
+3. **Network access**: LangSmith needs to send traces to the API (check firewalls)
+4. **Client wrapping**: Make sure you're using `wrap_openai()` or the `@traceable` decorator
+
+### Traces Too Verbose?
+
+You can control granularity:
+
+```python
+# Trace only the main agent, not every internal helper
+@traceable
+async def chat(question: str) -> str:
+    # This is traced
+    result = await process_question(question)
+    return result
+
+# Don't trace internal helpers unless needed
+async def process_question(question: str):
+    # Not traced (no decorator)
+    pass
+```
+
+## Next Steps
+
+Now that you can trace your agents:
+
+<CardGroup cols={2}>
+  <Card title="Evaluation Strategies" icon="check-double" href="/concepts/evaluation">
+    Learn how to use traces to systematically evaluate agent performance
+  </Card>
+  
+  <Card title="Analyzing Traces" icon="microscope" href="/guides/analyzing-agents">
+    Discover techniques for debugging and improving agents using trace data
+  </Card>
+</CardGroup>

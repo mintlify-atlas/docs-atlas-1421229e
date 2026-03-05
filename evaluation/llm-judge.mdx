@@ -1,0 +1,476 @@
+---
+title: LLM-as-Judge Evaluation
+description: Use language models to evaluate subjective criteria that are hard to check with code
+---
+
+LLM-as-judge evaluation uses a language model to assess subjective qualities in agent outputs - things like helpfulness, tone, coherence, and factual accuracy. This approach bridges the gap between deterministic code checks and human judgment.
+
+## When to Use LLM-as-Judge
+
+Use LLM-as-judge for criteria that are:
+
+- **Subjective** - Helpfulness, professionalism, empathy
+- **Semantic** - Correctness beyond exact string matching
+- **Contextual** - Appropriateness given the question
+- **Nuanced** - Requires reasoning about content
+
+<Note>
+LLM-as-judge is powerful but slower and more expensive than code-based evaluation. Use it for subjective criteria where code-based checks aren't sufficient.
+</Note>
+
+## Basic LLM-as-Judge
+
+Here's a simple evaluator using OpenAI:
+
+```python simple_llm_judge.py
+from openai import OpenAI
+
+client = OpenAI()
+
+def is_helpful_evaluator(outputs: dict, expected: dict) -> dict:
+    """Use GPT to judge if response is helpful."""
+    
+    prompt = f"""
+    You are evaluating a customer support response for helpfulness.
+    
+    Question: {expected['question']}
+    Response: {outputs['answer']}
+    
+    Is this response helpful to the customer?
+    Answer with just "yes" or "no".
+    """
+    
+    response = client.chat.completions.create(
+        model="gpt-5-nano",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0
+    )
+    
+    verdict = response.choices[0].message.content.strip().lower()
+    
+    return {
+        "score": 1 if verdict == "yes" else 0,
+        "comment": f"LLM judged response as {'helpful' if verdict == 'yes' else 'not helpful'}"
+    }
+```
+
+## Structured Prompts
+
+Provide clear evaluation criteria in your prompt:
+
+```python structured_prompt.py
+from openai import OpenAI
+
+client = OpenAI()
+
+EVALUATION_PROMPT = """
+You are evaluating customer support responses for quality.
+
+Evaluate the response on these criteria:
+1. **Accuracy**: Does it correctly answer the question?
+2. **Completeness**: Does it provide all necessary information?
+3. **Tone**: Is it professional and empathetic?
+4. **Clarity**: Is it easy to understand?
+
+**Question:** {question}
+
+**Response:** {response}
+
+**Expected Answer (reference):** {expected}
+
+Provide your evaluation as a JSON object:
+{{
+  "score": 0-100,
+  "reasoning": "Brief explanation of the score"
+}}
+"""
+
+def comprehensive_evaluator(outputs: dict, expected: dict) -> dict:
+    """Multi-criteria LLM evaluation."""
+    
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You are an expert evaluator. Respond only with valid JSON."},
+            {"role": "user", "content": EVALUATION_PROMPT.format(
+                question=expected["question"],
+                response=outputs["answer"],
+                expected=expected.get("answer", "N/A")
+            )}
+        ],
+        temperature=0,
+        response_format={"type": "json_object"}
+    )
+    
+    import json
+    result = json.loads(response.choices[0].message.content)
+    
+    return {
+        "score": result["score"] / 100,  # Normalize to 0-1
+        "comment": result["reasoning"]
+    }
+```
+
+## Real-World Example: Correctness Check
+
+Evaluate if the agent's answer is factually correct:
+
+```python eval_correctness.py
+from openai import OpenAI
+from langsmith import evaluate
+
+client = OpenAI()
+
+CORRECTNESS_PROMPT = """
+You are evaluating whether an agent's response correctly answers the customer's question.
+
+Compare the agent's response to the reference answer. The agent's response doesn't need to match word-for-word, but it should contain the same key information.
+
+**Question:** {question}
+
+**Reference Answer:** {reference}
+
+**Agent Response:** {response}
+
+Is the agent's response correct?
+Respond with ONLY: "correct" or "incorrect"
+"""
+
+def correctness_evaluator(outputs: dict, expected: dict) -> dict:
+    """Check if agent response is factually correct."""
+    
+    response = client.chat.completions.create(
+        model="gpt-5-nano",
+        messages=[{
+            "role": "system",
+            "content": "You are a precise evaluator. Respond with only 'correct' or 'incorrect'."
+        }, {
+            "role": "user",
+            "content": CORRECTNESS_PROMPT.format(
+                question=expected.get("question", "N/A"),
+                reference=expected.get("answer", "N/A"),
+                response=outputs["answer"]
+            )
+        }],
+        temperature=0
+    )
+    
+    verdict = response.choices[0].message.content.strip().lower()
+    is_correct = "correct" in verdict
+    
+    return {
+        "score": 1 if is_correct else 0,
+        "comment": f"Response is {verdict}"
+    }
+
+# Use in experiment
+results = evaluate(
+    your_agent,
+    data="officeflow-dataset",
+    evaluators=[correctness_evaluator]
+)
+```
+
+<Note>
+Using `temperature=0` makes LLM evaluations more deterministic and reproducible.
+</Note>
+
+## Using LangSmith's Built-in Evaluators
+
+LangSmith provides pre-built LLM evaluators:
+
+```python langsmith_evaluators.py
+from langsmith import evaluate
+from langsmith.evaluation import LangChainStringEvaluator
+
+# Use built-in evaluators
+results = evaluate(
+    your_agent,
+    data="officeflow-dataset",
+    evaluators=[
+        LangChainStringEvaluator("qa"),           # Question-answering correctness
+        LangChainStringEvaluator("helpfulness"),  # How helpful is the response
+        LangChainStringEvaluator("relevance"),    # Is response relevant to question
+    ]
+)
+```
+
+Available built-in evaluators:
+
+- `qa` - Correctness for Q&A tasks
+- `helpfulness` - Overall helpfulness
+- `relevance` - Relevance to the question
+- `coherence` - Internal consistency
+- `harmfulness` - Detects harmful content
+
+## Chain-of-Thought Evaluation
+
+Improve evaluation quality by asking the LLM to reason step-by-step:
+
+```python cot_evaluation.py
+from openai import OpenAI
+
+client = OpenAI()
+
+COT_PROMPT = """
+You are evaluating a customer support response.
+
+**Question:** {question}
+
+**Response:** {response}
+
+Evaluate this response step-by-step:
+
+1. **Identify the customer's core need**: What is the customer really asking for?
+
+2. **Check completeness**: Does the response address all parts of the question?
+
+3. **Assess accuracy**: Is the information provided correct?
+
+4. **Evaluate tone**: Is the response professional and empathetic?
+
+5. **Final verdict**: Based on the above, is this a good response?
+
+Provide your analysis in this format:
+```
+Core need: [your analysis]
+Completeness: [your analysis]
+Accuracy: [your analysis]
+Tone: [your analysis]
+Verdict: PASS or FAIL
+```
+"""
+
+def cot_evaluator(outputs: dict, expected: dict) -> dict:
+    """Chain-of-thought LLM evaluation."""
+    
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": COT_PROMPT.format(
+            question=expected["question"],
+            response=outputs["answer"]
+        )}],
+        temperature=0
+    )
+    
+    analysis = response.choices[0].message.content
+    passed = "PASS" in analysis.upper()
+    
+    return {
+        "score": 1 if passed else 0,
+        "comment": analysis
+    }
+```
+
+<Note>
+Chain-of-thought prompting often improves evaluation quality, especially for complex criteria, but increases latency and cost.
+</Note>
+
+## Multi-Model Consensus
+
+Use multiple models for higher confidence:
+
+```python consensus_eval.py
+from openai import OpenAI
+from anthropic import Anthropic
+
+openai_client = OpenAI()
+anthropic_client = Anthropic()
+
+def consensus_evaluator(outputs: dict, expected: dict) -> dict:
+    """Get consensus from multiple LLMs."""
+    
+    prompt = f"""
+    Is this response helpful and accurate?
+    Question: {expected['question']}
+    Response: {outputs['answer']}
+    Answer: yes or no
+    """
+    
+    # OpenAI evaluation
+    openai_response = openai_client.chat.completions.create(
+        model="gpt-5-nano",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0
+    )
+    openai_verdict = "yes" in openai_response.choices[0].message.content.lower()
+    
+    # Anthropic evaluation
+    anthropic_response = anthropic_client.messages.create(
+        model="claude-3-5-haiku-20241022",
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=10,
+        temperature=0
+    )
+    anthropic_verdict = "yes" in anthropic_response.content[0].text.lower()
+    
+    # Consensus: both must agree
+    consensus = openai_verdict and anthropic_verdict
+    
+    return {
+        "score": 1 if consensus else 0,
+        "comment": f"OpenAI: {openai_verdict}, Anthropic: {anthropic_verdict}"
+    }
+```
+
+## Best Practices
+
+### Use Specific Rubrics
+
+Provide concrete criteria rather than vague instructions:
+
+```python rubric_example.py
+GOOD_PROMPT = """
+Evaluate if the response is helpful:
+- Does it directly answer the question? (yes/no)
+- Does it provide actionable next steps? (yes/no)
+- Is it concise (under 100 words)? (yes/no)
+
+The response is helpful if all three criteria are met.
+"""
+
+VAGUE_PROMPT = """
+Is this response good? Answer yes or no.
+"""
+```
+
+### Calibrate Your Evaluator
+
+Test on examples with known outcomes:
+
+```python calibration.py
+test_cases = [
+    {
+        "question": "What is your return policy?",
+        "response": "You can return items within 30 days.",
+        "expected_score": 1,  # Should pass
+    },
+    {
+        "question": "What is your return policy?",
+        "response": "We sell office supplies.",
+        "expected_score": 0,  # Should fail
+    }
+]
+
+for test in test_cases:
+    result = your_evaluator({"answer": test["response"]}, {"question": test["question"]})
+    actual_score = result["score"]
+    
+    if actual_score != test["expected_score"]:
+        print(f"MISMATCH: Expected {test['expected_score']}, got {actual_score}")
+        print(f"Comment: {result['comment']}")
+```
+
+### Set Temperature to 0
+
+For reproducible evaluations:
+
+```python reproducible_llm.py
+response = client.chat.completions.create(
+    model="gpt-5-nano",
+    messages=[...],
+    temperature=0,  # Deterministic sampling
+    seed=42         # Further reproducibility (if supported)
+)
+```
+
+### Use Structured Outputs
+
+Request JSON for easier parsing:
+
+```python structured_output.py
+from openai import OpenAI
+import json
+
+client = OpenAI()
+
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{
+        "role": "user",
+        "content": "Evaluate this response and return JSON with 'score' (0-1) and 'reasoning' fields."
+    }],
+    response_format={"type": "json_object"},
+    temperature=0
+)
+
+result = json.loads(response.choices[0].message.content)
+score = result["score"]
+reasoning = result["reasoning"]
+```
+
+## Cost and Performance
+
+### Choose the Right Model
+
+- **GPT-5-nano**: Fast and cheap, good for simple judgments
+- **GPT-4o-mini**: Balanced cost/performance for most use cases
+- **GPT-4o**: Best quality for complex evaluations
+- **Claude 3.5 Haiku**: Fast and cost-effective alternative
+- **Claude 3.5 Sonnet**: High quality, good for detailed analysis
+
+### Batch Evaluations
+
+Use async for better throughput:
+
+```python async_llm_eval.py
+import asyncio
+from openai import AsyncOpenAI
+
+client = AsyncOpenAI()
+
+async def evaluate_one(outputs: dict, expected: dict) -> dict:
+    response = await client.chat.completions.create(
+        model="gpt-5-nano",
+        messages=[...],
+        temperature=0
+    )
+    # ... process response ...
+    return {"score": score, "comment": comment}
+
+async def evaluate_batch(examples: list) -> list:
+    tasks = [evaluate_one(ex["outputs"], ex["expected"]) for ex in examples]
+    return await asyncio.gather(*tasks)
+```
+
+## Limitations
+
+### Bias and Inconsistency
+
+LLMs can be inconsistent:
+
+- **Position bias**: May prefer first or last option
+- **Length bias**: May favor longer responses
+- **Self-preference**: May favor responses similar to their own style
+
+Mitigate by:
+- Using multiple evaluators
+- Providing clear rubrics
+- Calibrating on known examples
+
+### Cost at Scale
+
+LLM evaluation is expensive:
+
+- Use code-based evaluators where possible
+- Sample a subset for LLM evaluation
+- Use cheaper models for simpler criteria
+
+### Latency
+
+LLM evaluation is slower:
+
+- Use async/parallel evaluation
+- Cache evaluation results
+- Consider running evaluations offline
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Pairwise Eval" icon="code-compare" href="/evaluation/pairwise">
+    Compare agent versions side-by-side
+  </Card>
+  <Card title="Code-based Eval" icon="code" href="/evaluation/code-based">
+    Fast deterministic checks
+  </Card>
+</CardGroup>

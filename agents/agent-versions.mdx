@@ -1,0 +1,614 @@
+---
+title: "Agent Version History"
+description: "Progressive improvements to the OfficeFlow agent from v0 to v5"
+---
+
+## Overview
+
+The OfficeFlow agent evolved through six versions, each addressing specific production issues discovered through testing and analysis. This progression demonstrates a realistic development cycle for production AI agents.
+
+<Steps>
+  <Step title="v0: Basic Implementation">
+    Initial agent with no observability
+  </Step>
+  <Step title="v1: Add Tracing">
+    LangSmith integration for debugging
+  </Step>
+  <Step title="v2: Fix Tool Descriptions">
+    Improved schema discovery guidance
+  </Step>
+  <Step title="v3: Stock Communication Policy">
+    Strategic inventory messaging
+  </Step>
+  <Step title="v4: RAG Implementation">
+    Full document retrieval instead of chunking
+  </Step>
+  <Step title="v5: Conciseness Directive">
+    Reduced verbosity in responses
+  </Step>
+</Steps>
+
+---
+
+## v0: The Baseline Agent
+
+### What It Does
+
+The initial implementation includes:
+- Basic chat loop with conversation history
+- Two tools: `query_database` and `search_knowledge_base`
+- RAG using text chunking and embeddings
+- System prompt with persona and guidelines
+
+### Key Characteristics
+
+<Tabs>
+  <Tab title="Python">
+    ```python
+    from openai import AsyncOpenAI
+
+    # No tracing integration
+    client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+    # Simple function without decoration
+    def query_database(query: str, db_path: str) -> str:
+        try:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute(query)
+            results = cursor.fetchall()
+            conn.close()
+            return str(results)
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+    # Basic tool definition
+    QUERY_DATABASE_TOOL = {
+        "type": "function",
+        "function": {
+            "name": "query_database",
+            "description": "SQL query to get information about our inventory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "SQL query to execute"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    }
+    ```
+  </Tab>
+  
+  <Tab title="TypeScript">
+    ```typescript
+    import OpenAI from "openai";
+
+    // No tracing integration
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+    // Simple function without decoration
+    function queryDatabase(query: string, dbPath: string): string {
+      try {
+        const db = new Database(dbPath);
+        const results = db.prepare(query).all();
+        db.close();
+        return JSON.stringify(results);
+      } catch (e: any) {
+        return `Error: ${e.message}`;
+      }
+    }
+
+    // Basic tool definition
+    const QUERY_DATABASE_TOOL = {
+      type: "function" as const,
+      function: {
+        name: "query_database",
+        description: "SQL query to get information about our inventory.",
+        parameters: {
+          type: "object",
+          properties: {
+            query: {
+              type: "string",
+              description: "SQL query to execute",
+            },
+          },
+          required: ["query"],
+        },
+      },
+    };
+    ```
+  </Tab>
+</Tabs>
+
+### The Problem
+
+**No observability.** When the agent behaves unexpectedly, there's no way to:
+- See what tool calls were made
+- Inspect the LLM's reasoning
+- Debug multi-step interactions
+- Analyze patterns across conversations
+
+---
+
+## v1: Adding Tracing
+
+### What Changed
+
+Integration with LangSmith for complete observability:
+
+<Tabs>
+  <Tab title="Python">
+    ```python
+    from langsmith import traceable, uuid7
+    from langsmith.wrappers import wrap_openai
+
+    # Wrap OpenAI client for automatic tracing
+    client = wrap_openai(AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY")))
+
+    # Generate unique thread ID
+    thread_id = str(uuid7())
+
+    # Decorate tools with @traceable
+    @traceable(name="query_database", run_type="tool")
+    def query_database(query: str, db_path: str) -> str:
+        try:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute(query)
+            results = cursor.fetchall()
+            conn.close()
+            return str(results)
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+    @traceable(name="search_knowledge_base", run_type="tool")
+    async def search_knowledge_base(query: str, top_k: int = 2) -> str:
+        # ... implementation
+        pass
+
+    # Decorate main chat function
+    @traceable(name="Emma", metadata={"thread_id": thread_id})
+    async def chat(question: str) -> str:
+        # ... chat logic
+        pass
+    ```
+  </Tab>
+  
+  <Tab title="TypeScript">
+    ```typescript
+    import { traceable } from "langsmith/traceable";
+    import { wrapOpenAI } from "langsmith/wrappers";
+    import { uuid7 } from "langsmith";
+
+    // Wrap OpenAI client for automatic tracing
+    const client = wrapOpenAI(new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
+
+    // Generate unique thread ID
+    const threadId = String(uuid7());
+
+    // Wrap tools with traceable
+    const queryDatabase = traceable(
+      (query: string, dbPath: string): string => {
+        try {
+          const db = new Database(dbPath);
+          const results = db.prepare(query).all();
+          db.close();
+          return JSON.stringify(results);
+        } catch (e: any) {
+          return `Error: ${e.message}`;
+        }
+      },
+      { name: "query_database", run_type: "tool" }
+    );
+
+    const searchKnowledgeBase = traceable(
+      async (query: string, topK: number = 2): Promise<string> => {
+        // ... implementation
+      },
+      { name: "search_knowledge_base", run_type: "tool" }
+    );
+
+    // Wrap main chat function
+    const chat = traceable(
+      async (question: string): Promise<{ messages: any[]; output: string }> => {
+        // ... chat logic
+      },
+      { name: "Emma", metadata: { thread_id: threadId } }
+    );
+    ```
+  </Tab>
+</Tabs>
+
+### Benefits
+
+<CardGroup cols={2}>
+  <Card title="Complete Visibility" icon="eye">
+    Every LLM call, tool invocation, and intermediate step is recorded
+  </Card>
+  
+  <Card title="Easy Debugging" icon="bug">
+    Click through traces in LangSmith UI to see exactly what happened
+  </Card>
+  
+  <Card title="Thread Tracking" icon="link">
+    Associate multiple interactions with the same conversation
+  </Card>
+  
+  <Card title="Performance Analysis" icon="chart-line">
+    Measure latency, token usage, and cost per interaction
+  </Card>
+</CardGroup>
+
+---
+
+## v2: Enhanced Tool Descriptions
+
+### The Problem
+
+In production, the agent would sometimes fail to query the database correctly because it didn't know the schema. It would make assumptions or generate invalid SQL.
+
+### The Fix
+
+Added explicit schema discovery instructions to the tool description:
+
+<Tabs>
+  <Tab title="Python">
+    ```python
+    QUERY_DATABASE_TOOL = {
+        "type": "function",
+        "function": {
+            "name": "query_database",
+            "description": "SQL query to get information about our inventory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": """SQL query to execute against the inventory database.
+
+YOU DO NOT KNOW THE SCHEMA. ALWAYS discover it first:
+1. Query 'SELECT name FROM sqlite_master WHERE type="table"' to see available tables
+2. Use 'PRAGMA table_info(table_name)' to inspect columns for each table
+3. Only after understanding the schema, construct your search queries"""
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    }
+    ```
+  </Tab>
+  
+  <Tab title="TypeScript">
+    ```typescript
+    const QUERY_DATABASE_TOOL = {
+      type: "function" as const,
+      function: {
+        name: "query_database",
+        description: "SQL query to get information about our inventory.",
+        parameters: {
+          type: "object",
+          properties: {
+            query: {
+              type: "string",
+              description: `SQL query to execute against the inventory database.
+
+YOU DO NOT KNOW THE SCHEMA. ALWAYS discover it first:
+1. Query 'SELECT name FROM sqlite_master WHERE type="table"' to see available tables
+2. Use 'PRAGMA table_info(table_name)' to inspect columns for each table
+3. Only after understanding the schema, construct your search queries`,
+            },
+          },
+          required: ["query"],
+        },
+      },
+    };
+    ```
+  </Tab>
+</Tabs>
+
+### Key Insight
+
+<Warning>
+  Tool descriptions are critical prompt engineering real estate. The LLM reads them every time it decides whether to use a tool and how to format arguments.
+</Warning>
+
+By adding step-by-step instructions directly in the tool description, we ensure the agent follows the correct discovery process without requiring system prompt changes.
+
+---
+
+## v3: Stock Quantity Policy
+
+### The Problem
+
+The agent was revealing exact stock quantities to customers: "We have 47 units in stock." This:
+- Exposed competitive information
+- Gave customers leverage to negotiate or wait
+- Didn't create urgency for low-stock items
+
+### The Solution
+
+Added a comprehensive stock communication policy to the system prompt:
+
+```text
+IMPORTANT - STOCK INFORMATION POLICY:
+When discussing product availability, NEVER reveal specific stock quantities or numbers to customers. Instead:
+- If quantity > 20: Say the item is "in stock" or "available"
+- If quantity 10-20: Say the item is "in stock, but running low" or "available, though inventory is limited" to create urgency
+- If quantity 5-9: Say "only a few left in stock" or "limited availability" to encourage quick action
+- If quantity 1-4: Say "very limited stock remaining" or "almost sold out"
+- If quantity 0: Say "currently out of stock" or "unavailable at the moment"
+
+This policy protects our competitive advantage and inventory management strategy while still helping customers make informed purchasing decisions.
+```
+
+### Business Impact
+
+<AccordionGroup>
+  <Accordion title="Protects Competitive Information">
+    Competitors can't gauge inventory levels by probing the agent
+  </Accordion>
+  
+  <Accordion title="Creates Appropriate Urgency">
+    Low stock items use language that encourages faster purchasing decisions
+  </Accordion>
+  
+  <Accordion title="Professional Communication">
+    Maintains helpful tone while implementing business strategy
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## v4: RAG Improvements
+
+### The Problem
+
+v0-v3 used text chunking for the knowledge base:
+- Documents split into 200-character chunks with 20-character overlap
+- Agent retrieved 2 most relevant chunks
+- Often got incomplete information from split documents
+- Context boundaries could split important related information
+
+### The Fix
+
+Switched to full document retrieval:
+
+<Tabs>
+  <Tab title="Python">
+    ```python
+    async def load_knowledge_base(kb_dir: str = "./knowledge_base") -> None:
+        """Load knowledge base documents and embeddings for WHOLE documents (no chunking)."""
+        global knowledge_base_docs, knowledge_base_embeddings
+
+        kb_path = Path(kb_dir) / "documents"
+        cache_path = Path(kb_dir) / "embeddings" / "embeddings.json"
+
+        # Check if embeddings are stale
+        if _embeddings_are_stale(kb_path, cache_path):
+            print("Knowledge base documents changed, regenerating embeddings...")
+            await _generate_and_cache_embeddings(kb_path, cache_path)
+        else:
+            # Load from cache
+            with open(cache_path, 'r') as f:
+                cache_data = json.load(f)
+            knowledge_base_docs = [tuple(doc) for doc in cache_data["docs"]]
+            knowledge_base_embeddings = cache_data["embeddings"]
+
+    @traceable(name="search_knowledge_base", run_type="tool")
+    async def search_knowledge_base(query: str, top_k: int = 2) -> str:
+        """Search knowledge base using semantic similarity. Returns WHOLE documents, not chunks."""
+        # ... generate query embedding
+        # ... calculate similarities
+        # ... return top k full documents
+    ```
+  </Tab>
+  
+  <Tab title="TypeScript">
+    ```typescript
+    async function loadKnowledgeBase(kbDir: string = "./knowledge_base"): Promise<void> {
+      // Load full documents, not chunks
+      const docs: [string, string][] = [];
+      const files = fs.readdirSync(kbPath).filter(f => f.endsWith(".md"));
+      
+      for (const file of files) {
+        if (file === "CHUNKING_NOTES.md") continue;
+        const content = fs.readFileSync(path.join(kbPath, file), "utf-8");
+        // Store full document, not chunks
+        docs.push([file, content]);
+      }
+
+      knowledgeBaseDocs = docs;
+
+      // Generate one embedding per document
+      const embeddings: number[][] = [];
+      for (const [filename, content] of docs) {
+        const response = await client.embeddings.create({
+          model: "text-embedding-3-small",
+          input: content,
+        });
+        embeddings.push(response.data[0].embedding);
+      }
+
+      knowledgeBaseEmbeddings = embeddings;
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Benefits
+
+<CardGroup cols={2}>
+  <Card title="Complete Context" icon="file-lines">
+    The agent sees entire policy documents, not fragments
+  </Card>
+  
+  <Card title="No Boundary Issues" icon="scissors">
+    Related information stays together
+  </Card>
+  
+  <Card title="Better Answers" icon="check">
+    Can synthesize complete policies rather than partial snippets
+  </Card>
+  
+  <Card title="Cache Invalidation" icon="refresh">
+    Automatically regenerates embeddings when docs change
+  </Card>
+</CardGroup>
+
+### Trade-offs
+
+<Note>
+  This approach works well for OfficeFlow because:
+  - Knowledge base documents are relatively small (< 2000 tokens each)
+  - The LLM context window can handle 2 full documents comfortably
+  - Policy information is best understood in complete form
+  
+  For larger documents or massive knowledge bases, chunking strategies may still be necessary.
+</Note>
+
+---
+
+## v5: Conciseness Directive
+
+### The Problem
+
+During evaluation, the agent's responses were often too verbose:
+- Repeated information unnecessarily
+- Used filler phrases like "I'd be more than happy to help you with that"
+- Explained things that customers already understood
+- Took 3 sentences when 1 would suffice
+
+### The Solution
+
+Added an explicit conciseness directive to the system prompt:
+
+```text
+CONCISENESS PRIORITY:
+Your responses should be brief and to the point. Avoid unnecessary filler, repetition, 
+or overly elaborate explanations. Get straight to the answer. If you can say something 
+in one sentence, don't use three. Customers appreciate quick, direct answers over lengthy responses.
+```
+
+Also updated example interactions to model concise responses:
+
+<CodeGroup>
+```text Before
+Customer: "Do you have copy paper?"
+You: "Yes, we do! We carry several types of copy paper. Are you looking for standard 8.5x11 inch letter size, or do you need a specific weight or finish? I can check what we have in stock."
+```
+
+```text After  
+Customer: "Do you have copy paper?"
+You: "Yes! We carry several types. Are you looking for standard 8.5x11, or a specific weight or finish?"
+```
+</CodeGroup>
+
+### Measurement
+
+This change can be quantitatively evaluated using:
+- Token count reduction in responses
+- Character/word count metrics
+- Pairwise evaluation (v4 vs v5) with human or LLM judges
+- Customer satisfaction scores
+
+See [Evaluating Conciseness](/evaluating/conciseness-eval) for implementation details.
+
+---
+
+## Version Comparison
+
+<Tabs>
+  <Tab title="Features">
+    | Feature | v0 | v1 | v2 | v3 | v4 | v5 |
+    |---------|----|----|----|----|-------|-------|
+    | Basic chat | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+    | Tools (DB + KB) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+    | LangSmith tracing | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
+    | Schema discovery | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
+    | Stock policy | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ |
+    | Full doc RAG | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ |
+    | Conciseness | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
+  </Tab>
+  
+  <Tab title="Use Cases">
+    | Version | Best For |
+    |---------|----------|
+    | v0 | Learning basic agent structure |
+    | v1 | Understanding tracing implementation |
+    | v2 | Learning about tool description engineering |
+    | v3 | Adding business logic constraints |
+    | v4 | Implementing production RAG |
+    | v5 | Production deployment |
+  </Tab>
+</Tabs>
+
+## Running Different Versions
+
+<Tabs>
+  <Tab title="Python">
+    ```bash
+    cd source/python/officeflow-agent
+    
+    # Run specific version
+    python agent_v0.py
+    python agent_v1.py
+    python agent_v2.py
+    python agent_v3.py
+    python agent_v4.py
+    python agent_v5.py  # Production version
+    ```
+  </Tab>
+  
+  <Tab title="TypeScript">
+    ```bash
+    cd source/ts/officeflow-agent
+    
+    # Run specific version
+    npx tsx agent_v0.ts
+    npx tsx agent_v1.ts
+    npx tsx agent_v2.ts
+    npx tsx agent_v3.ts
+    npx tsx agent_v4.ts
+    npx tsx agent_v5.ts  # Production version
+    ```
+  </Tab>
+</Tabs>
+
+## Key Takeaways
+
+<CardGroup cols={2}>
+  <Card title="Iterate Based on Evidence" icon="microscope">
+    Each version addresses a real issue discovered through testing or production use
+  </Card>
+  
+  <Card title="Observability First" icon="eye">
+    Adding tracing (v1) enables all subsequent improvements
+  </Card>
+  
+  <Card title="Tool Descriptions Matter" icon="wrench">
+    They're read on every tool use - make them comprehensive
+  </Card>
+  
+  <Card title="Business Logic in Prompts" icon="briefcase">
+    The stock policy (v3) shows how to encode business rules
+  </Card>
+  
+  <Card title="RAG is Nuanced" icon="database">
+    Chunking vs full documents depends on your use case
+  </Card>
+  
+  <Card title="Measure Everything" icon="chart-bar">
+    Conciseness improvements (v5) need evaluation to validate
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<Card title="Analyzing Agent Behavior" icon="chart-line" href="/agents/analyzing-agents">
+  Learn how to use LangSmith traces to debug and improve your agents
+</Card>

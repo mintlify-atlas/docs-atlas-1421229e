@@ -1,0 +1,576 @@
+---
+title: Pairwise Comparison Evaluation
+description: Compare two agent versions side-by-side to measure which performs better
+---
+
+Pairwise evaluation compares two agent versions on the same inputs and determines which produces better outputs. This is especially useful when absolute scoring is difficult but relative comparison is easier.
+
+## When to Use Pairwise Evaluation
+
+Use pairwise comparison when:
+
+- **Comparing agent versions** - Which agent is more concise, helpful, or accurate?
+- **Relative quality matters** - It's easier to say "A is better than B" than "A scores 0.73"
+- **Subjective criteria** - Conciseness, tone, style
+- **A/B testing decisions** - Which version should go to production?
+
+<Note>
+Pairwise evaluation works best for comparing two versions on the same dataset. For evaluating a single agent, use standard evaluators instead.
+</Note>
+
+## Basic Pairwise Evaluation
+
+Run experiments on both agents, then compare:
+
+<Steps>
+
+### Run Experiments
+
+First, evaluate both agent versions:
+
+```python run_both_agents.py
+from langsmith import evaluate
+
+# Run experiment for agent v1
+results_v1 = evaluate(
+    agent_v1,
+    data="officeflow-dataset",
+    experiment_prefix="agent-v1"
+)
+
+# Run experiment for agent v2
+results_v2 = evaluate(
+    agent_v2,
+    data="officeflow-dataset",
+    experiment_prefix="agent-v2"
+)
+
+print(f"v1 experiment: {results_v1.experiment_name}")
+print(f"v2 experiment: {results_v2.experiment_name}")
+```
+
+### Create Pairwise Evaluator
+
+Write an evaluator that compares two outputs:
+
+```python pairwise_evaluator.py
+from openai import OpenAI
+
+client = OpenAI()
+
+def conciseness_evaluator(inputs: dict, outputs: list[dict]) -> list[int]:
+    """Compare two responses for conciseness.
+    
+    Returns [1, 0] if first response wins, [0, 1] if second wins, [0, 0] for tie.
+    """
+    
+    prompt = f"""
+    Which response is MORE CONCISE while still providing all crucial information?
+    
+    Question: {inputs['question']}
+    
+    Response A: {outputs[0]['answer']}
+    
+    Response B: {outputs[1]['answer']}
+    
+    Output ONLY a single number:
+    1 if Response A is more concise
+    2 if Response B is more concise
+    0 if they are roughly equal
+    """
+    
+    response = client.chat.completions.create(
+        model="gpt-5-nano",
+        messages=[
+            {"role": "system", "content": "You are a conciseness evaluator. Respond with only: 0, 1, or 2."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0
+    )
+    
+    preference = int(response.choices[0].message.content.strip())
+    
+    if preference == 1:
+        return [1, 0]  # A wins
+    elif preference == 2:
+        return [0, 1]  # B wins
+    else:
+        return [0, 0]  # Tie
+```
+
+### Run Pairwise Comparison
+
+Compare the experiments:
+
+```python run_pairwise.py
+from langsmith import evaluate
+
+evaluate(
+    ("agent-v1-3e016f9c", "agent-v2-7d7ee287"),  # Experiment names
+    evaluators=[conciseness_evaluator],
+    randomize_order=True  # Prevent position bias
+)
+```
+
+</Steps>
+
+## Real-World Example: Conciseness Comparison
+
+This example from the OfficeFlow course compares two agent versions on conciseness:
+
+```python eval_conciseness_pairwise.py
+"""
+Pairwise conciseness evaluator for comparing two experiments.
+
+Run this AFTER run_agents.py, using the experiment names it outputs.
+
+Usage:
+    uv run python eval_conciseness_pairwise.py <experiment-a> <experiment-b>
+    uv run python eval_conciseness_pairwise.py agent-v4-3e016f9c agent-v5-7d7ee287
+"""
+
+from openai import OpenAI
+from langsmith import evaluate
+
+client = OpenAI()
+
+CONCISENESS_PROMPT = """
+You are evaluating two responses to the same customer question.
+Determine which response is MORE CONCISE while still providing all crucial information.
+
+**Conciseness** means getting straight to the point, avoiding filler, and not repeating information.
+**Crucial information** includes direct answers, necessary context, and required next steps.
+
+A shorter response is NOT automatically better if it omits crucial information.
+
+**Question:** {question}
+
+**Response A:**
+{response_a}
+
+**Response B:**
+{response_b}
+
+Output your verdict as a single number:
+1 if Response A is more concise while preserving crucial information
+2 if Response B is more concise while preserving crucial information
+0 if they are roughly equal
+"""
+
+def conciseness_evaluator(inputs: dict, outputs: list[dict]) -> list[int]:
+    response = client.chat.completions.create(
+        model="gpt-5-nano",
+        messages=[
+            {"role": "system", "content": "You are a conciseness evaluator. Respond with only a single number: 0, 1, or 2."},
+            {"role": "user", "content": CONCISENESS_PROMPT.format(
+                question=inputs["question"],
+                response_a=outputs[0].get("answer", "N/A"),
+                response_b=outputs[1].get("answer", "N/A"),
+            )}
+        ],
+    )
+    
+    preference = int(response.choices[0].message.content.strip())
+    
+    if preference == 1:
+        return [1, 0]  # A wins
+    elif preference == 2:
+        return [0, 1]  # B wins
+    else:
+        return [0, 0]  # Tie
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) != 3:
+        print("Usage: python eval_conciseness_pairwise.py <experiment-a> <experiment-b>")
+        print("Example: python eval_conciseness_pairwise.py agent-v4-3e016f9c agent-v5-7d7ee287")
+        sys.exit(1)
+    
+    evaluate(
+        (sys.argv[1], sys.argv[2]),
+        evaluators=[conciseness_evaluator],
+        randomize_order=True,
+    )
+```
+
+<Note>
+`randomize_order=True` is critical - it prevents position bias where the LLM might favor the first or second response systematically.
+</Note>
+
+## Complete Workflow
+
+Here's how to run both agents and compare them in one script:
+
+```python run_pairwise_experiment.py
+import asyncio
+import sys
+from pathlib import Path
+
+agent_dir = Path(__file__).resolve().parent.parent.parent / "officeflow-agent"
+sys.path.insert(0, str(agent_dir))
+
+from langsmith import aevaluate, evaluate
+from agent_v4 import chat as chat_v4, load_knowledge_base as load_kb_v4
+from agent_v5 import chat as chat_v5, load_knowledge_base as load_kb_v5
+from eval_conciseness_pairwise import conciseness_evaluator
+from dotenv import load_dotenv
+
+load_dotenv()
+
+DATASET_NAME = "officeflow-dataset"
+KB_DIR = str(agent_dir / "knowledge_base")
+
+async def chat_wrapper_v4(inputs: dict) -> dict:
+    question = inputs.get("question", "")
+    result = await chat_v4(question)
+    return {"answer": result["output"]}
+
+async def chat_wrapper_v5(inputs: dict) -> dict:
+    question = inputs.get("question", "")
+    result = await chat_v5(question)
+    return {"answer": result["output"]}
+
+async def main():
+    # Load knowledge bases for both agents
+    print("Loading knowledge bases...")
+    await load_kb_v4(KB_DIR)
+    await load_kb_v5(KB_DIR)
+    
+    # Step 1: Run experiment for agent v4
+    print("\n" + "="*50)
+    print("Running experiment for agent_v4...")
+    print("="*50)
+    v4_results = await aevaluate(
+        chat_wrapper_v4,
+        data=DATASET_NAME,
+        experiment_prefix="agent-v4",
+    )
+    
+    # Step 2: Run experiment for agent v5
+    print("\n" + "="*50)
+    print("Running experiment for agent_v5...")
+    print("="*50)
+    v5_results = await aevaluate(
+        chat_wrapper_v5,
+        data=DATASET_NAME,
+        experiment_prefix="agent-v5",
+    )
+    
+    # Get experiment names from results
+    v4_experiment = v4_results.experiment_name
+    v5_experiment = v5_results.experiment_name
+    
+    print(f"\nv4 experiment: {v4_experiment}")
+    print(f"v5 experiment: {v5_experiment}")
+    
+    # Step 3: Run pairwise evaluation
+    print("\n" + "="*50)
+    print("Running pairwise evaluation...")
+    print("="*50)
+    evaluate(
+        (v4_experiment, v5_experiment),
+        evaluators=[conciseness_evaluator],
+        randomize_order=True,
+    )
+    
+    print("\n" + "="*50)
+    print("Done! Check LangSmith for results.")
+    print("="*50)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+## Pairwise Evaluator Patterns
+
+### Simple Preference
+
+The evaluator returns `[1, 0]`, `[0, 1]`, or `[0, 0]`:
+
+```python preference_scores.py
+def pairwise_evaluator(inputs: dict, outputs: list[dict]) -> list[int]:
+    # Determine which is better
+    if outputs[0]["answer"] is better:
+        return [1, 0]  # First wins
+    elif outputs[1]["answer"] is better:
+        return [0, 1]  # Second wins
+    else:
+        return [0, 0]  # Tie
+```
+
+### Strength of Preference
+
+Return scores showing how much better one is:
+
+```python preference_strength.py
+def pairwise_with_strength(inputs: dict, outputs: list[dict]) -> list[float]:
+    # Score each from 0-1
+    score_a = evaluate_quality(outputs[0])
+    score_b = evaluate_quality(outputs[1])
+    
+    # Normalize so they sum to 1
+    total = score_a + score_b
+    if total > 0:
+        return [score_a / total, score_b / total]
+    else:
+        return [0.5, 0.5]  # Equal if both scored 0
+```
+
+### Multiple Criteria
+
+Compare on several dimensions:
+
+```python multi_criteria_pairwise.py
+from openai import OpenAI
+import json
+
+client = OpenAI()
+
+def multi_criteria_pairwise(inputs: dict, outputs: list[dict]) -> list[dict]:
+    """Compare on multiple criteria and return detailed scores."""
+    
+    prompt = f"""
+    Compare these two responses on multiple criteria:
+    
+    Question: {inputs['question']}
+    Response A: {outputs[0]['answer']}
+    Response B: {outputs[1]['answer']}
+    
+    For each criterion, output which response is better (1 for A, 2 for B, 0 for tie):
+    - Conciseness
+    - Accuracy
+    - Helpfulness
+    - Professionalism
+    
+    Return JSON:
+    {{
+      "conciseness": 1 or 2 or 0,
+      "accuracy": 1 or 2 or 0,
+      "helpfulness": 1 or 2 or 0,
+      "professionalism": 1 or 2 or 0
+    }}
+    """
+    
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_object"},
+        temperature=0
+    )
+    
+    results = json.loads(response.choices[0].message.content)
+    
+    # Calculate overall winner
+    a_wins = sum(1 for v in results.values() if v == 1)
+    b_wins = sum(1 for v in results.values() if v == 2)
+    
+    return [
+        {"score": 1 if a_wins > b_wins else 0, "details": results},
+        {"score": 1 if b_wins > a_wins else 0, "details": results}
+    ]
+```
+
+## Best Practices
+
+### Always Randomize Order
+
+Prevent position bias:
+
+```python always_randomize.py
+evaluate(
+    (exp_a, exp_b),
+    evaluators=[your_evaluator],
+    randomize_order=True  # Critical!
+)
+```
+
+### Provide Clear Criteria
+
+Define what "better" means:
+
+```python clear_criteria.py
+GOOD_PROMPT = """
+Which response is MORE CONCISE while still providing all crucial information?
+
+**Conciseness** means:
+- Getting straight to the point
+- Avoiding unnecessary filler words
+- Not repeating information
+
+**Crucial information** includes:
+- Direct answer to the question
+- Necessary context
+- Required next steps
+"""
+
+VAGUE_PROMPT = """
+Which response is better?
+"""
+```
+
+### Use Descriptive Evaluation Names
+
+```python descriptive_names.py
+# Good: Clear what's being compared
+evaluate(
+    ("agent-v4-concise", "agent-v5-verbose"),
+    evaluators=[conciseness_evaluator],
+    experiment_prefix="conciseness-comparison"
+)
+
+# Bad: Unclear
+evaluate(
+    ("exp1", "exp2"),
+    evaluators=[evaluator]
+)
+```
+
+### Consider Multiple Judges
+
+Use multiple models or run multiple times for confidence:
+
+```python multiple_judges.py
+def multi_judge_pairwise(inputs: dict, outputs: list[dict]) -> list[int]:
+    """Get consensus from multiple evaluation runs."""
+    
+    votes_a = 0
+    votes_b = 0
+    
+    # Run evaluation 3 times
+    for _ in range(3):
+        result = single_judge(inputs, outputs)
+        if result == [1, 0]:
+            votes_a += 1
+        elif result == [0, 1]:
+            votes_b += 1
+    
+    # Return majority vote
+    if votes_a > votes_b:
+        return [1, 0]
+    elif votes_b > votes_a:
+        return [0, 1]
+    else:
+        return [0, 0]
+```
+
+## Interpreting Results
+
+Pairwise results show:
+
+- **Win rate**: How often each agent won
+- **Tie rate**: How often outputs were equivalent
+- **Per-example comparison**: Which specific inputs show differences
+
+### Statistical Significance
+
+For small datasets, a few wins might not be meaningful:
+
+```python significance.py
+from scipy.stats import binomtest
+
+def is_significant(wins_a: int, wins_b: int, ties: int, alpha=0.05) -> bool:
+    """Check if difference is statistically significant."""
+    total_decisive = wins_a + wins_b
+    
+    if total_decisive == 0:
+        return False
+    
+    # Binomial test: is win rate significantly different from 50%?
+    result = binomtest(wins_a, total_decisive, 0.5)
+    return result.pvalue < alpha
+
+# Example
+wins_a = 15
+wins_b = 8
+ties = 2
+
+if is_significant(wins_a, wins_b, ties):
+    print("Agent A is significantly better!")
+else:
+    print("Difference is not statistically significant.")
+```
+
+## Common Use Cases
+
+### Prompt Engineering
+
+Compare prompt variations:
+
+```python prompt_comparison.py
+# Two agents with different prompts
+agent_a = ChatAgent(prompt="You are a helpful assistant.")
+agent_b = ChatAgent(prompt="You are a concise assistant who answers in under 50 words.")
+
+# Compare conciseness
+evaluate(
+    (experiment_a, experiment_b),
+    evaluators=[conciseness_evaluator]
+)
+```
+
+### Model Selection
+
+Compare different models:
+
+```python model_comparison.py
+# Agent with GPT-4
+agent_gpt4 = ChatAgent(model="gpt-4o")
+
+# Agent with GPT-3.5
+agent_gpt35 = ChatAgent(model="gpt-3.5-turbo")
+
+# Compare quality vs cost
+evaluate(
+    (experiment_gpt4, experiment_gpt35),
+    evaluators=[quality_evaluator]
+)
+```
+
+### Configuration Tuning
+
+Compare temperature, max_tokens, etc.:
+
+```python config_comparison.py
+agent_temp0 = ChatAgent(temperature=0)
+agent_temp1 = ChatAgent(temperature=1)
+
+evaluate(
+    (experiment_temp0, experiment_temp1),
+    evaluators=[creativity_evaluator]
+)
+```
+
+## Limitations
+
+### Only Compares Two at a Time
+
+For more than two versions, run multiple pairwise comparisons:
+
+```python multi_version.py
+versions = ["v1", "v2", "v3"]
+
+# Compare all pairs
+for i, v1 in enumerate(versions):
+    for v2 in versions[i+1:]:
+        print(f"Comparing {v1} vs {v2}")
+        evaluate((v1, v2), evaluators=[your_evaluator])
+```
+
+### Subject to LLM Biases
+
+Mitigate by:
+- Always randomizing order
+- Using clear rubrics
+- Running multiple evaluations
+- Using multiple judge models
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Create Datasets" icon="database" href="/evaluation/datasets">
+    Build test datasets for evaluation
+  </Card>
+  <Card title="LLM-as-Judge" icon="gavel" href="/evaluation/llm-judge">
+    Deep dive into LLM evaluation
+  </Card>
+</CardGroup>

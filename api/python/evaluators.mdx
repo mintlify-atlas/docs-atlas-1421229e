@@ -1,0 +1,504 @@
+---
+title: 'Evaluator Functions'
+description: 'Python evaluator function reference for testing and validating agent behavior'
+---
+
+## Overview
+
+Evaluators are functions that assess agent performance on specific criteria. This reference documents the evaluator patterns and implementations used in the Building Reliable Agents course for testing schema checking, conciseness, and other behavioral aspects.
+
+## Schema Checking Evaluators
+
+### `schema_before_query()`
+
+Verifies that agents check database schema before executing data queries.
+
+<ParamField path="run" type="Run" required>
+  LangSmith Run object containing the agent execution trace with outputs and messages
+</ParamField>
+
+<ParamField path="example" type="Example" required>
+  LangSmith Example object containing the test case data (not used in this evaluator)
+</ParamField>
+
+<ResponseField name="score" type="int">
+  - `1`: Agent checked schema before querying data (or made no database calls)
+  - `0`: Agent queried data without checking schema first
+</ResponseField>
+
+<ResponseField name="comment" type="str">
+  Explanation of the score with details about what was found
+</ResponseField>
+
+**Example:**
+
+```python
+import re
+
+SCHEMA_PATTERNS = [
+    r"PRAGMA\s+table_info",
+    r"SELECT\s+.*FROM\s+sqlite_master",
+    r"PRAGMA\s+database_list",
+    r"\.schema",
+]
+
+def _is_schema_query(sql: str) -> bool:
+    """Return True if the SQL is a schema-inspection query."""
+    for pattern in SCHEMA_PATTERNS:
+        if re.search(pattern, sql, re.IGNORECASE):
+            return True
+    return False
+
+def _extract_tool_calls(run) -> list[dict]:
+    """Extract tool calls from run output messages."""
+    run_outputs = run.outputs if hasattr(run, "outputs") else run.get("outputs", {}) or {}
+    messages = run_outputs.get("messages", [])
+    
+    tool_calls = []
+    for msg in messages:
+        if isinstance(msg, dict):
+            for tc in msg.get("tool_calls", []):
+                func = tc.get("function", {})
+                tool_calls.append({
+                    "name": func.get("name", ""),
+                    "arguments": func.get("arguments", ""),
+                })
+    return tool_calls
+
+def schema_before_query(run, example) -> dict:
+    """Score 1 if agent checks DB schema before querying data, 0 otherwise.
+    
+    If the agent never calls query_database, scores 1 (not applicable).
+    """
+    tool_calls = _extract_tool_calls(run)
+    
+    db_calls = [tc for tc in tool_calls if tc["name"] == "query_database"]
+    
+    # No database calls — nothing to check
+    if not db_calls:
+        return {"score": 1, "comment": "No query_database calls — schema check not applicable"}
+    
+    # Check if any schema query appears before the first non-schema data query
+    seen_schema_check = False
+    for tc in db_calls:
+        sql = tc.get("arguments", "")
+        if _is_schema_query(sql):
+            seen_schema_check = True
+        else:
+            # First real data query — was there a schema check before it?
+            if not seen_schema_check:
+                return {
+                    "score": 0,
+                    "comment": f"Agent queried data without checking schema first. First query: {sql[:200]}",
+                }
+            break  # Schema was checked before first data query — pass
+    
+    if seen_schema_check:
+        return {"score": 1, "comment": "Agent checked schema before querying data"}
+    
+    return {"score": 1, "comment": "All query_database calls were schema inspections"}
+
+# Usage with LangSmith
+from langsmith import evaluate
+
+results = evaluate(
+    agent_function,
+    data="my-dataset",
+    evaluators=[schema_before_query]
+)
+```
+
+**Key Concepts:**
+
+- **Schema Patterns**: Regex patterns that identify schema inspection queries
+- **Tool Call Extraction**: Parse agent output to find all database tool calls
+- **Sequential Checking**: Verify schema check happens before first data query
+- **Not Applicable Cases**: Return score of 1 when no database queries are made
+
+## Pairwise Comparison Evaluators
+
+### `conciseness_evaluator()`
+
+Compares two agent responses for conciseness while preserving crucial information.
+
+<ParamField path="inputs" type="dict" required>
+  Dictionary containing:
+  - `question`: The user's question both agents answered
+</ParamField>
+
+<ParamField path="outputs" type="list[dict]" required>
+  List of two output dictionaries, each containing:
+  - `answer`: The agent's response text
+</ParamField>
+
+<ResponseField name="scores" type="list[int]">
+  List of two scores:
+  - `[1, 0]`: First response is more concise
+  - `[0, 1]`: Second response is more concise
+  - `[0, 0]`: Both are roughly equal in conciseness
+</ResponseField>
+
+**Example:**
+
+```python
+from openai import OpenAI
+
+client = OpenAI()
+
+CONCISENESS_PROMPT = """You are evaluating two responses to the same customer question.
+Determine which response is MORE CONCISE while still providing all crucial information.
+
+**Conciseness** means getting straight to the point, avoiding filler, and not repeating information.
+**Crucial information** includes direct answers, necessary context, and required next steps.
+
+A shorter response is NOT automatically better if it omits crucial information.
+
+**Question:** {question}
+
+**Response A:**
+{response_a}
+
+**Response B:**
+{response_b}
+
+Output your verdict as a single number:
+1 if Response A is more concise while preserving crucial information
+2 if Response B is more concise while preserving crucial information
+0 if they are roughly equal"""
+
+def conciseness_evaluator(inputs: dict, outputs: list[dict]) -> list[int]:
+    """Compare two responses for conciseness.
+    
+    Returns [1, 0] if first is more concise, [0, 1] if second is more concise,
+    or [0, 0] if tied.
+    """
+    response = client.chat.completions.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": "You are a conciseness evaluator. Respond with only a single number: 0, 1, or 2."},
+            {"role": "user", "content": CONCISENESS_PROMPT.format(
+                question=inputs["question"],
+                response_a=outputs[0].get("answer", "N/A"),
+                response_b=outputs[1].get("answer", "N/A"),
+            )}
+        ],
+    )
+    
+    preference = int(response.choices[0].message.content.strip())
+    
+    if preference == 1:
+        return [1, 0]  # A wins
+    elif preference == 2:
+        return [0, 1]  # B wins
+    else:
+        return [0, 0]  # Tie
+
+# Usage with LangSmith pairwise evaluation
+from langsmith import evaluate
+
+results = evaluate(
+    ("experiment-a", "experiment-b"),
+    evaluators=[conciseness_evaluator],
+    randomize_order=True,
+)
+```
+
+**Pairwise Evaluation:**
+
+```python
+# Run from command line
+# python eval_conciseness_pairwise.py experiment-a experiment-b
+
+import sys
+from langsmith import evaluate
+
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        print("Usage: python eval_conciseness_pairwise.py <experiment-a> <experiment-b>")
+        print("Example: python eval_conciseness_pairwise.py agent-v4-3e016f9c agent-v5-7d7ee287")
+        sys.exit(1)
+    
+    evaluate(
+        (sys.argv[1], sys.argv[2]),
+        evaluators=[conciseness_evaluator],
+        randomize_order=True,
+    )
+```
+
+## Simple Code-Based Evaluators
+
+### String Matching Evaluator
+
+Check if response contains specific text.
+
+```python
+def mentions_officeflow(outputs: dict) -> bool:
+    """Check if response mentions 'officeflow'."""
+    return "officeflow" in outputs["response"].lower()
+
+# Usage
+from langsmith import evaluate
+
+results = evaluate(
+    agent_function,
+    data="officeflow-dataset",
+    evaluators=[mentions_officeflow]
+)
+```
+
+### Custom Scoring Evaluator
+
+Return a numeric score with explanation.
+
+```python
+def response_length_score(outputs: dict) -> dict:
+    """Score based on response length (prefer shorter responses)."""
+    response = outputs.get("response", "")
+    length = len(response)
+    
+    if length < 100:
+        score = 1.0
+        comment = "Response is concise"
+    elif length < 200:
+        score = 0.7
+        comment = "Response is moderately concise"
+    else:
+        score = 0.3
+        comment = "Response is verbose"
+    
+    return {
+        "score": score,
+        "comment": comment,
+        "metadata": {"length": length}
+    }
+```
+
+## LLM-as-Judge Evaluators
+
+Use an LLM to evaluate agent outputs.
+
+### Binary Classification
+
+```python
+from openai import OpenAI
+
+client = OpenAI()
+
+def is_helpful(inputs: dict, outputs: dict) -> dict:
+    """Use LLM to judge if response is helpful."""
+    response = client.chat.completions.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": "You are evaluating customer service responses. Reply with only 'yes' or 'no'."},
+            {"role": "user", "content": f"""Question: {inputs['question']}
+Response: {outputs['answer']}
+
+Is this response helpful? Answer yes or no."""}
+        ]
+    )
+    
+    verdict = response.choices[0].message.content.strip().lower()
+    score = 1 if verdict == "yes" else 0
+    
+    return {
+        "score": score,
+        "comment": f"LLM judged response as {'helpful' if score else 'not helpful'}"
+    }
+```
+
+### Multi-Criteria Evaluation
+
+```python
+import json
+from openai import OpenAI
+
+client = OpenAI()
+
+def multi_criteria_eval(inputs: dict, outputs: dict) -> dict:
+    """Evaluate response on multiple criteria."""
+    prompt = f"""Evaluate this customer service response on these criteria (1-5 scale):
+
+1. Helpfulness: Does it answer the question?
+2. Accuracy: Is the information correct?
+3. Conciseness: Is it brief and to the point?
+4. Professionalism: Is the tone appropriate?
+
+Question: {inputs['question']}
+Response: {outputs['answer']}
+
+Respond with JSON: {{"helpfulness": 1-5, "accuracy": 1-5, "conciseness": 1-5, "professionalism": 1-5, "explanation": "..."}}"""
+    
+    response = client.chat.completions.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_object"}
+    )
+    
+    result = json.loads(response.choices[0].message.content)
+    
+    # Calculate overall score (average)
+    scores = [result["helpfulness"], result["accuracy"], result["conciseness"], result["professionalism"]]
+    overall_score = sum(scores) / len(scores) / 5  # Normalize to 0-1
+    
+    return {
+        "score": overall_score,
+        "comment": result["explanation"],
+        "metadata": result
+    }
+```
+
+## Running Evaluations
+
+### Single Agent Evaluation
+
+```python
+from langsmith import evaluate
+
+# Evaluate a single agent
+results = evaluate(
+    agent_function,
+    data="my-dataset",
+    evaluators=[schema_before_query, mentions_officeflow],
+    experiment_prefix="agent-v1"
+)
+
+print(f"Results: {results}")
+```
+
+### Pairwise Comparison
+
+```python
+from langsmith import evaluate
+
+# Compare two experiments
+results = evaluate(
+    ("experiment-a-name", "experiment-b-name"),
+    evaluators=[conciseness_evaluator],
+    randomize_order=True,
+)
+```
+
+### Multiple Evaluators
+
+```python
+from langsmith import evaluate
+
+evaluators = [
+    schema_before_query,
+    mentions_officeflow,
+    is_helpful,
+    response_length_score,
+]
+
+results = evaluate(
+    agent_function,
+    data="test-dataset",
+    evaluators=evaluators,
+    experiment_prefix="comprehensive-eval"
+)
+```
+
+## Evaluator Return Formats
+
+### Boolean Return
+
+Simplest form - returns pass/fail.
+
+```python
+def simple_check(outputs: dict) -> bool:
+    return len(outputs["response"]) > 0
+```
+
+### Dictionary Return
+
+Provides score and explanation.
+
+```python
+def detailed_check(outputs: dict) -> dict:
+    return {
+        "score": 0.8,
+        "comment": "Good response with minor issues",
+        "metadata": {"length": len(outputs["response"])}
+    }
+```
+
+### Pairwise Return
+
+Returns list of scores for comparison.
+
+```python
+def pairwise_check(inputs: dict, outputs: list[dict]) -> list[int]:
+    # Returns [1, 0] for A wins, [0, 1] for B wins, [0, 0] for tie
+    return [1, 0]  # A is better
+```
+
+## Best Practices
+
+### Clear Criteria
+
+Define evaluation criteria explicitly:
+
+```python
+def clear_evaluator(run, example) -> dict:
+    """
+    Evaluator: Checks that responses are under 200 characters.
+    
+    Score:
+    - 1: Response is under 200 characters (concise)
+    - 0: Response exceeds 200 characters (verbose)
+    """
+    # Implementation
+```
+
+### Helpful Comments
+
+Provide actionable feedback:
+
+```python
+return {
+    "score": 0,
+    "comment": f"Response length {length} exceeds limit of 200. Consider removing filler phrases."
+}
+```
+
+### Metadata
+
+Include diagnostic information:
+
+```python
+return {
+    "score": score,
+    "comment": comment,
+    "metadata": {
+        "tool_calls_count": len(tool_calls),
+        "schema_checks": schema_check_count,
+        "data_queries": data_query_count
+    }
+}
+```
+
+### Robust Parsing
+
+Handle missing or malformed data:
+
+```python
+def safe_evaluator(run, example) -> dict:
+    try:
+        outputs = run.outputs if hasattr(run, "outputs") else run.get("outputs", {})
+        if not outputs:
+            return {"score": 0, "comment": "No outputs found"}
+        
+        response = outputs.get("response", "")
+        if not response:
+            return {"score": 0, "comment": "Empty response"}
+        
+        # Evaluation logic
+        return {"score": 1, "comment": "Success"}
+    except Exception as e:
+        return {"score": 0, "comment": f"Evaluation error: {str(e)}"}
+```
+
+## Related
+
+- [Agent Implementation](/api/python/agent) - Agents being evaluated
+- [Tool Functions](/api/python/tools) - Tools that evaluators may check

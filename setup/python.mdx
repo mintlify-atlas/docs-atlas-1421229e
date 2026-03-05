@@ -1,0 +1,246 @@
+---
+title: Python Setup
+description: Complete guide to setting up the Python environment for the Building Reliable Agents course
+---
+
+## Prerequisites
+
+Before you begin, ensure you have the following:
+
+- **Chrome browser** (recommended for the best experience)
+- **Python 3.12 or 3.13** - See [Python version management](#python-version-management) below
+- **Package manager**: [uv](https://docs.astral.sh/uv/) (recommended) or [pip](https://pypi.org/project/pip/)
+
+## Installation
+
+<Steps>
+  <Step title="Clone the repository">
+    Download the course repository using a shallow clone to get only the latest code:
+
+    ```bash
+    git clone --depth 1 https://github.com/langchain-ai/lca-reliable-agents.git
+    cd lca-reliable-agents/python
+    ```
+  </Step>
+
+  <Step title="Create environment file">
+    Make a copy of the example environment file:
+
+    ```bash
+    cp example.env .env
+    ```
+  </Step>
+
+  <Step title="Configure API keys">
+    Edit the `.env` file to include your API keys:
+
+    ```bash
+    # Required
+    OPENAI_API_KEY='your_openai_api_key_here'
+
+    # Optional, used by the question generator
+    ANTHROPIC_API_KEY='your_anthropic_api_key_here'
+
+    # Required for evaluation and tracing
+    LANGSMITH_API_KEY='your_langsmith_api_key_here'
+    LANGSMITH_TRACING=true
+    LANGSMITH_PROJECT=lca-reliable-agents
+    
+    # Uncomment the following if you are on the EU instance:
+    #LANGSMITH_ENDPOINT=https://eu.api.smith.langchain.com
+    ```
+
+    **Where to get API keys:**
+    - [LangSmith API Key](https://smith.langchain.com/) - Create a free account
+    - [OpenAI API Key](https://openai.com/index/openai-api/)
+    - [Anthropic API Key](https://console.anthropic.com) (optional)
+  </Step>
+
+  <Step title="Install dependencies">
+    Create a virtual environment and install dependencies:
+
+    <CodeGroup>
+      ```bash uv (recommended)
+      uv sync
+      ```
+
+      ```bash pip
+      python -m venv .venv
+      source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+      pip install -r requirements.txt
+      ```
+    </CodeGroup>
+
+    <Note>
+      Using `uv` is recommended as it automatically manages Python versions and creates optimized virtual environments. It will install a compatible Python version (3.12 or 3.13) in the `.venv` directory when running `uv sync`.
+    </Note>
+  </Step>
+
+  <Step title="Verify setup">
+    Run the verification script to ensure everything is configured correctly:
+
+    <CodeGroup>
+      ```bash uv
+      uv run python env_utils.py
+      ```
+
+      ```bash pip
+      source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+      python env_utils.py
+      ```
+    </CodeGroup>
+
+    **The verification script checks:**
+    - ✅ Python executable location and version (must be 3.12 or 3.13)
+    - ✅ Virtual environment is properly activated
+    - ✅ Required packages are installed with correct versions
+    - ✅ Packages are in the correct Python version's site-packages
+    - ✅ Environment variables (API keys) are properly configured
+
+    If the script flags any issues, see the [troubleshooting section](#troubleshooting) below.
+  </Step>
+</Steps>
+
+## Running Scripts
+
+This course uses Python scripts (not notebooks). Here's how to run them:
+
+<CodeGroup>
+  ```bash uv (recommended)
+  # Example: run the agent interactively
+  uv run python officeflow-agent/agent_v5.py
+
+  # Example: run an experiment
+  uv run python module-2/lesson-3/run_experiment.py
+  ```
+
+  ```bash pip
+  source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+  # Example: run the agent interactively
+  python officeflow-agent/agent_v5.py
+
+  # Example: run an experiment
+  python module-2/lesson-3/run_experiment.py
+  ```
+</CodeGroup>
+
+<Note>
+  When using `uv`, you don't need to manually activate the virtual environment. The `uv run` command automatically uses the correct Python version and environment.
+</Note>
+
+## Python Version Management
+
+Managing your Python version is best done with virtual environments. This allows you to select a Python version for the course independent of the system Python version.
+
+### Using uv (recommended)
+
+`uv` will automatically install a version of Python compatible with the versions specified in the `pyproject.toml` file. When you run `uv sync`, it installs the correct Python version in the `.venv` directory and uses it automatically with `uv run`.
+
+For more information, see the [uv documentation](https://docs.astral.sh/uv/).
+
+### Using pyenv + pip
+
+If you're using pip instead of uv, you can use [pyenv](https://github.com/pyenv/pyenv) to manage your Python versions:
+
+```bash
+pyenv install 3.13
+pyenv local 3.13
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+## Environment Variables
+
+This course uses the [dotenv](https://pypi.org/project/python-dotenv) module to read key-value pairs from the `.env` file and set them in the environment. They do not need to be set globally in your system environment.
+
+<Warning>
+  If you have API keys already set in your system environment, they may conflict with the ones in your `.env` file. The `env_utils.py` verification script will detect and warn you about such conflicts. By default, `load_dotenv()` does not override existing environment variables.
+</Warning>
+
+## LangSmith Configuration
+
+LangSmith is required for evaluation and tracing in this course:
+
+<Steps>
+  <Step title="Create account">
+    Sign up for a free [LangSmith account](https://smith.langchain.com/)
+  </Step>
+
+  <Step title="Generate API key">
+    Navigate to Settings → API Keys and create a new API key
+  </Step>
+
+  <Step title="Update .env file">
+    Add your LangSmith API key to the `.env` file:
+
+    ```bash
+    LANGSMITH_API_KEY='your_langsmith_api_key_here'
+    LANGSMITH_TRACING=true
+    LANGSMITH_PROJECT=lca-reliable-agents
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  If you're on the EU instance of LangSmith, uncomment and use `LANGSMITH_ENDPOINT=https://eu.api.smith.langchain.com` in your `.env` file.
+</Note>
+
+## Troubleshooting
+
+### ImportError when running env_utils.py
+
+If you see an error like `ModuleNotFoundError: No module named 'dotenv'`, you're likely running Python outside the virtual environment.
+
+**Solution:**
+- Use `uv run python xxx.py` (recommended), or
+- Activate the virtual environment first:
+  - macOS/Linux: `source .venv/bin/activate`
+  - Windows: `.venv\Scripts\activate`
+
+### Environment Variable Conflicts
+
+If you see a warning about "ENVIRONMENT VARIABLE CONFLICTS DETECTED", you have API keys set in your system environment that differ from your `.env` file.
+
+**Solutions:**
+1. Unset the conflicting system environment variables (commands provided in warning)
+2. Use `load_dotenv(override=True)` in your scripts to force .env values to take precedence
+3. Update your `.env` file to match your system environment
+
+### LangSmith Tracing Errors
+
+If you see "LANGSMITH_TRACING is enabled but LANGSMITH_API_KEY still has the example/placeholder value", you need to set a valid LangSmith API key in your `.env` file.
+
+**Solution:**
+Replace the placeholder value in `.env` with your actual LangSmith API key from [smith.langchain.com](https://smith.langchain.com/).
+
+### Wrong Python Version
+
+If you see a warning about Python version not satisfying requirements (must be 3.12 or 3.13):
+
+**Solutions:**
+- If using `uv`: Run `uv sync` which will automatically install the correct Python version
+- If using pip: Install Python 3.12 or 3.13 using [pyenv](#using-pyenv--pip) or from [python.org](https://www.python.org/downloads/)
+
+## Model Providers
+
+The course primarily uses OpenAI's `gpt-5-nano` model, which is very inexpensive. If you don't have an OpenAI API key, sign up [here](https://openai.com/index/openai-api/).
+
+You can optionally obtain an Anthropic API key [here](https://console.anthropic.com) for the question generator.
+
+<Warning>
+  This course has been created using particular models and model providers. You can use other providers, but you'll need to update the API keys in the `.env` file and make necessary code changes. LangChain supports many chat model providers - see the [full list here](https://docs.langchain.com/oss/python/integrations/providers/all_providers).
+</Warning>
+
+## Development Environment
+
+This course uses Python scripts that you can edit and run in any editor, including:
+- VSCode
+- Cursor
+- Windsurf
+- Any text editor with a terminal
+
+## Using Coding Agents
+
+If you're using coding agents during the course, you can provide your agent access to the LangSmith documentation. Instructions are available [here](https://docs.langchain.com/use-these-docs).

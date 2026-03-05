@@ -1,0 +1,341 @@
+---
+title: "Tool Functions"
+description: "Reference for agent tool functions including database queries and knowledge base search"
+---
+
+## Overview
+
+Tool functions provide agents with capabilities to query structured databases and search unstructured knowledge bases. All tools are wrapped with LangSmith's `traceable` decorator for observability.
+
+## Database Tools
+
+### queryDatabase()
+
+Executes SQL queries against a SQLite database and returns results as JSON.
+
+<ParamField path="query" type="string" required>
+  SQL query to execute. The agent should first discover the schema using `PRAGMA table_info()` or `SELECT name FROM sqlite_master WHERE type='table'`
+</ParamField>
+
+<ParamField path="dbPath" type="string" required>
+  File path to the SQLite database file
+</ParamField>
+
+<ResponseField name="results" type="string">
+  JSON-stringified array of query results, or error message if query fails
+</ResponseField>
+
+```typescript
+import Database from "better-sqlite3";
+import { traceable } from "langsmith/traceable";
+
+const queryDatabase = traceable(
+  (query: string, dbPath: string): string => {
+    try {
+      const db = new Database(dbPath);
+      const results = db.prepare(query).all();
+      db.close();
+      return JSON.stringify(results);
+    } catch (e: any) {
+      return `Error: ${e.message}`;
+    }
+  },
+  { name: "query_database", run_type: "tool" }
+);
+```
+
+#### Usage Example
+
+```typescript
+// Discover schema first
+const tables = queryDatabase(
+  "SELECT name FROM sqlite_master WHERE type='table'",
+  "./inventory.db"
+);
+console.log(tables);
+// [{"name":"products"},{"name":"categories"}]
+
+// Inspect table structure
+const schema = queryDatabase(
+  "PRAGMA table_info(products)",
+  "./inventory.db"
+);
+
+// Query actual data
+const products = queryDatabase(
+  "SELECT * FROM products WHERE category = 'paper' LIMIT 10",
+  "./inventory.db"
+);
+```
+
+#### Schema Discovery Pattern
+
+The tool description instructs the agent to always discover the schema first:
+
+```
+YOU DO NOT KNOW THE SCHEMA. ALWAYS discover it first:
+1. Query 'SELECT name FROM sqlite_master WHERE type="table"' to see available tables
+2. Use 'PRAGMA table_info(table_name)' to inspect columns for each table
+3. Only after understanding the schema, construct your search queries
+```
+
+## Knowledge Base Tools
+
+### searchKnowledgeBase()
+
+Searches the knowledge base using semantic similarity with embeddings.
+
+<ParamField path="query" type="string" required>
+  Natural language search query or question
+</ParamField>
+
+<ParamField path="topK" type="number" default={2}>
+  Number of top results to return
+</ParamField>
+
+<ResponseField name="results" type="string">
+  Formatted string containing the most relevant documents with relevance scores, or error if knowledge base not loaded
+</ResponseField>
+
+```typescript
+import { traceable } from "langsmith/traceable";
+import OpenAI from "openai";
+
+const searchKnowledgeBase = traceable(
+  async (query: string, topK: number = 2): Promise<string> => {
+    if (knowledgeBaseDocs.length === 0 || knowledgeBaseEmbeddings.length === 0) {
+      return "Error: Knowledge base not loaded";
+    }
+
+    // Generate embedding for query
+    const response = await client.embeddings.create({
+      model: "text-embedding-3-small",
+      input: query,
+    });
+    const queryEmbedding = response.data[0].embedding;
+
+    // Calculate cosine similarity with all documents
+    const similarities: [number, number][] = [];
+    for (let i = 0; i < knowledgeBaseEmbeddings.length; i++) {
+      const similarity = cosineSimilarity(queryEmbedding, knowledgeBaseEmbeddings[i]);
+      similarities.push([i, similarity]);
+    }
+
+    // Sort by similarity and get top k
+    similarities.sort((a, b) => b[1] - a[1]);
+    const topResults = similarities.slice(0, topK);
+
+    // Format results - return ENTIRE documents
+    const results: string[] = [];
+    for (const [idx, score] of topResults) {
+      const [filename, content] = knowledgeBaseDocs[idx];
+      results.push(`=== ${filename} (relevance: ${score.toFixed(3)}) ===\n${content}\n`);
+    }
+
+    return results.join("\n");
+  },
+  { name: "search_knowledge_base", run_type: "tool" }
+);
+```
+
+#### Usage Example
+
+```typescript
+// Search for policy information
+const returnPolicy = await searchKnowledgeBase(
+  "What is the return policy?",
+  2
+);
+
+console.log(returnPolicy);
+/*
+=== returns_policy.md (relevance: 0.892) ===
+# Return Policy
+
+Customers can return items within 30 days...
+
+=== shipping_info.md (relevance: 0.745) ===
+# Shipping Information
+
+All returns must be shipped to...
+*/
+```
+
+#### Chunking Strategy (v3)
+
+Agent version 3 implements text chunking for better retrieval:
+
+```typescript
+function chunkText(text: string, chunkSize: number = 200, overlap: number = 20): string[] {
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < text.length) {
+    const end = start + chunkSize;
+    const chunk = text.slice(start, end);
+    if (chunk.trim()) {
+      chunks.push(chunk);
+    }
+    start = end - overlap;
+  }
+  return chunks;
+}
+```
+
+Chunked documents are indexed with identifiers:
+
+```typescript
+const fileChunks = chunkText(content);
+for (let i = 0; i < fileChunks.length; i++) {
+  chunks.push([`${file}:chunk_${i}`, fileChunks[i]]);
+}
+```
+
+## Embeddings Cache Management
+
+### embeddingsAreStale()
+
+Checks if cached embeddings need regeneration by comparing modification times.
+
+<ParamField path="kbPath" type="string" required>
+  Path to knowledge base documents directory
+</ParamField>
+
+<ParamField path="cachePath" type="string" required>
+  Path to embeddings cache file
+</ParamField>
+
+<ResponseField name="isStale" type="boolean">
+  True if embeddings need regeneration, false if cache is valid
+</ResponseField>
+
+```typescript
+function embeddingsAreStale(kbPath: string, cachePath: string): boolean {
+  if (!fs.existsSync(cachePath)) {
+    return true;
+  }
+
+  const cacheMtime = fs.statSync(cachePath).mtimeMs;
+
+  const files = fs.readdirSync(kbPath).filter(f => f.endsWith(".md"));
+  for (const file of files) {
+    if (file === "CHUNKING_NOTES.md") continue;
+    const fileMtime = fs.statSync(path.join(kbPath, file)).mtimeMs;
+    if (fileMtime > cacheMtime) {
+      console.log(`  Stale: ${file} was modified after embeddings were generated`);
+      return true;
+    }
+  }
+
+  return false;
+}
+```
+
+### generateAndCacheEmbeddings()
+
+Generates embeddings for all knowledge base documents and caches them.
+
+<ParamField path="kbPath" type="string" required>
+  Path to knowledge base documents directory
+</ParamField>
+
+<ParamField path="cachePath" type="string" required>
+  Path where embeddings cache should be saved
+</ParamField>
+
+```typescript
+async function generateAndCacheEmbeddings(kbPath: string, cachePath: string): Promise<void> {
+  const docs: [string, string][] = [];
+  const files = fs.readdirSync(kbPath).filter(f => f.endsWith(".md"));
+  
+  for (const file of files) {
+    if (file === "CHUNKING_NOTES.md") continue;
+    const content = fs.readFileSync(path.join(kbPath, file), "utf-8");
+    docs.push([file, content]);
+  }
+
+  knowledgeBaseDocs = docs;
+
+  console.log(`Generating embeddings for ${docs.length} documents...`);
+  const embeddings: number[][] = [];
+  for (const [filename, content] of docs) {
+    const response = await client.embeddings.create({
+      model: "text-embedding-3-small",
+      input: content,
+    });
+    embeddings.push(response.data[0].embedding);
+    console.log(`  ${filename}`);
+  }
+
+  knowledgeBaseEmbeddings = embeddings;
+
+  // Save to cache
+  const cacheDir = path.dirname(cachePath);
+  if (!fs.existsSync(cacheDir)) {
+    fs.mkdirSync(cacheDir, { recursive: true });
+  }
+  const cacheData = { docs, embeddings };
+  fs.writeFileSync(cachePath, JSON.stringify(cacheData));
+  console.log(`Embeddings cached to ${cachePath}`);
+}
+```
+
+## Tool Integration in Agent
+
+Tools are integrated into the agent using OpenAI's function calling:
+
+```typescript
+const tools = [QUERY_DATABASE_TOOL, SEARCH_KNOWLEDGE_BASE_TOOL];
+
+const response = await client.chat.completions.create({
+  model: "gpt-5-nano",
+  messages,
+  tools,
+  tool_choice: "auto",
+});
+
+// Execute tool calls
+for (const toolCall of responseMessage.tool_calls) {
+  const functionArgs = JSON.parse(toolCall.function.arguments);
+  
+  let result: string;
+  if (toolCall.function.name === "query_database") {
+    result = await queryDatabase(functionArgs.query, dbPath);
+  } else if (toolCall.function.name === "search_knowledge_base") {
+    result = await searchKnowledgeBase(functionArgs.query);
+  }
+}
+```
+
+## Best Practices
+
+### Database Queries
+
+1. **Always discover schema first** - Don't assume table or column names
+2. **Handle errors gracefully** - Return error messages as strings
+3. **Limit result sets** - Use `LIMIT` to prevent overwhelming responses
+
+### Knowledge Base Search
+
+1. **Load knowledge base on startup** - Embeddings generation is expensive
+2. **Use caching** - Check for stale embeddings before regenerating
+3. **Tune topK parameter** - Balance context size vs. relevance
+4. **Consider chunking** - For large documents, chunk before embedding
+
+### Traceability
+
+ Both tools use LangSmith's `traceable` wrapper for observability:
+
+```typescript
+const myTool = traceable(
+  (param: string) => {
+    // Tool implementation
+  },
+  { name: "my_tool", run_type: "tool" }
+);
+```
+
+This enables:
+- Automatic trace logging
+- Performance monitoring
+- Debugging and error tracking
+- Cost analysis

@@ -1,0 +1,338 @@
+---
+title: Running Experiments
+description: Execute evaluation experiments to measure agent performance systematically
+---
+
+Experiments connect your agent, dataset, and evaluators to produce quantitative measurements of performance. Every experiment creates a snapshot you can compare against future versions.
+
+## Anatomy of an Experiment
+
+An experiment requires three components:
+
+1. **Target**: The agent or function to evaluate
+2. **Dataset**: Test cases with inputs (and optionally expected outputs)
+3. **Evaluators**: Functions that score the agent's outputs
+
+```python experiment_components.py
+from langsmith import evaluate
+
+# 1. Your agent (target)
+def your_agent(inputs: dict) -> dict:
+    question = inputs["question"]
+    # ... agent logic ...
+    return {"answer": response}
+
+# 2. Dataset (by name)
+dataset_name = "officeflow-dataset"
+
+# 3. Evaluators
+def check_mentions_product(outputs: dict) -> bool:
+    return "officeflow" in outputs["answer"].lower()
+
+# Run experiment
+results = evaluate(
+    your_agent,
+    data=dataset_name,
+    evaluators=[check_mentions_product]
+)
+```
+
+## Basic Experiment
+
+Here's a minimal example from the OfficeFlow agent:
+
+<CodeGroup>
+```python run_experiment.py
+from dotenv import load_dotenv
+from langsmith import evaluate
+
+load_dotenv()
+
+# Target: Your agent function
+def dummy_app(inputs: dict) -> dict:
+    return {
+        "response": "Sure! In OfficeFlow, you can reset your password from the settings page."
+    }
+
+# Evaluator: Check if response mentions brand
+def mentions_officeflow(outputs: dict) -> bool:
+    return "officeflow" in outputs["response"].lower()
+
+# Run experiment
+results = evaluate(
+    dummy_app,
+    data="officeflow-dataset",
+    evaluators=[mentions_officeflow]
+)
+```
+
+```typescript run_experiment.ts
+import { evaluate } from "langsmith";
+import { config } from "dotenv";
+
+config();
+
+// Target: Your agent function
+function dummyApp(inputs: { question: string }) {
+  return {
+    response: "Sure! In OfficeFlow, you can reset your password from the settings page."
+  };
+}
+
+// Evaluator: Check if response mentions brand
+function mentionsOfficeFlow(outputs: { response: string }) {
+  return outputs.response.toLowerCase().includes("officeflow");
+}
+
+// Run experiment
+const results = await evaluate(
+  dummyApp,
+  {
+    data: "officeflow-dataset",
+    evaluators: [mentionsOfficeFlow]
+  }
+);
+```
+</CodeGroup>
+
+<Note>
+The `evaluate` function automatically runs your agent on every example in the dataset and applies all evaluators to the outputs.
+</Note>
+
+## Async Agents
+
+For agents using async/await, use `aevaluate`:
+
+```python async_experiment.py
+import asyncio
+from langsmith import aevaluate
+from agent_v5 import chat, load_knowledge_base
+
+async def chat_wrapper(inputs: dict) -> dict:
+    question = inputs.get("question", "")
+    result = await chat(question)
+    return {"answer": result["output"], "messages": result["messages"]}
+
+async def main():
+    # Load any required resources
+    await load_knowledge_base(kb_dir="./knowledge_base")
+    
+    # Run evaluation
+    results = await aevaluate(
+        chat_wrapper,
+        data="officeflow-dataset"
+    )
+    return results
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+## Experiment Naming
+
+Experiments are automatically named with timestamps. Use `experiment_prefix` to organize results:
+
+```python named_experiments.py
+from langsmith import evaluate
+
+results = evaluate(
+    agent_v5,
+    data="officeflow-dataset",
+    evaluators=[schema_before_query],
+    experiment_prefix="schema-check-v5"  # Appears as "schema-check-v5-{timestamp}"
+)
+```
+
+## Real-World Example
+
+Here's how the OfficeFlow course evaluates the schema-checking behavior:
+
+```python run_eval.py
+import asyncio
+import sys
+from pathlib import Path
+from langsmith import evaluate
+from langsmith import uuid7
+
+# Import your agent
+import agent_v5
+from agent_v5 import chat, load_knowledge_base
+from eval_schema_check import schema_before_query
+
+async def setup():
+    """Load knowledge base before running evals."""
+    kb_dir = "./knowledge_base"
+    await load_knowledge_base(kb_dir)
+
+def run_agent(inputs: dict) -> dict:
+    """Invoke the agent with a fresh thread_id each time."""
+    agent_v5.thread_id = str(uuid7())
+    return asyncio.run(chat(inputs["question"]))
+
+if __name__ == "__main__":
+    asyncio.run(setup())
+    
+    results = evaluate(
+        run_agent,
+        data="officeflow-dataset",
+        evaluators=[schema_before_query],
+        experiment_prefix="schema-check-v5",
+    )
+```
+
+<Note>
+Creating a fresh `thread_id` for each example ensures test isolation - one example's state doesn't affect another.
+</Note>
+
+## Experiment Results
+
+The `evaluate` function returns an `ExperimentResults` object:
+
+```python analyze_results.py
+results = evaluate(
+    your_agent,
+    data="officeflow-dataset",
+    evaluators=[mentions_officeflow]
+)
+
+print(f"Experiment: {results.experiment_name}")
+print(f"Dataset: {results.dataset_name}")
+print(f"Results URL: {results.experiment_url}")
+
+# Access individual evaluator results
+for result in results.results:
+    print(f"Input: {result.example.inputs}")
+    print(f"Output: {result.output}")
+    print(f"Scores: {result.evaluation_results}")
+```
+
+## Viewing Results
+
+Experiments appear in the LangSmith UI with:
+
+- **Aggregate metrics** - Pass rate, average scores
+- **Per-example results** - See which inputs failed
+- **Trace links** - Debug individual runs
+- **Comparison view** - Compare against other experiments
+
+<Steps>
+
+### Access Experiment Results
+
+1. Run your experiment
+2. Click the results URL printed to console
+3. Or navigate to **Datasets** → Your Dataset → **Experiments** tab
+
+### Compare Experiments
+
+1. Select two experiments from the same dataset
+2. Click **Compare**
+3. View side-by-side metrics and identify regressions
+
+</Steps>
+
+## Multiple Evaluators
+
+Pass multiple evaluators to measure different aspects:
+
+```python multiple_evaluators.py
+from langsmith import evaluate
+
+def mentions_brand(outputs: dict) -> bool:
+    return "officeflow" in outputs["answer"].lower()
+
+def is_concise(outputs: dict) -> bool:
+    return len(outputs["answer"].split()) < 50
+
+def uses_tools(run, example) -> dict:
+    messages = run.outputs.get("messages", [])
+    used_tools = any(msg.get("tool_calls") for msg in messages)
+    return {"score": 1 if used_tools else 0}
+
+results = evaluate(
+    your_agent,
+    data="officeflow-dataset",
+    evaluators=[
+        mentions_brand,
+        is_concise,
+        uses_tools
+    ]
+)
+```
+
+## Using Dataset-Bound Evaluators
+
+You can attach evaluators directly to datasets in the LangSmith UI. These run automatically:
+
+```python auto_evaluators.py
+from langsmith import aevaluate
+
+# Evaluators bound to the dataset in UI will run automatically
+results = await aevaluate(
+    chat_wrapper,
+    data="officeflow-dataset"  # No evaluators specified - uses dataset's bound evaluators
+)
+```
+
+<Note>
+Dataset-bound evaluators are useful for organization-wide standards that should apply to all experiments on that dataset.
+</Note>
+
+## Best Practices
+
+### Test Isolation
+
+Ensure each example runs independently:
+
+```python test_isolation.py
+import uuid
+
+def run_agent(inputs: dict) -> dict:
+    # Create fresh state for each run
+    thread_id = str(uuid.uuid4())
+    
+    # Reset any global state
+    agent.reset_state()
+    
+    return agent.chat(inputs["question"], thread_id=thread_id)
+```
+
+### Performance Optimization
+
+For large datasets, use async evaluation:
+
+```python parallel_eval.py
+from langsmith import aevaluate
+
+results = await aevaluate(
+    async_agent,
+    data="large-dataset",
+    evaluators=[evaluator1, evaluator2],
+    max_concurrency=10  # Run 10 examples in parallel
+)
+```
+
+### Reproducibility
+
+Set seeds and model parameters for consistent results:
+
+```python reproducible_eval.py
+def your_agent(inputs: dict) -> dict:
+    response = llm.invoke(
+        inputs["question"],
+        temperature=0,  # Deterministic sampling
+        seed=42         # Reproducible outputs
+    )
+    return {"answer": response}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Code-based Eval" icon="code" href="/evaluation/code-based">
+    Write deterministic evaluators
+  </Card>
+  <Card title="LLM-as-Judge" icon="gavel" href="/evaluation/llm-judge">
+    Evaluate subjective criteria
+  </Card>
+</CardGroup>

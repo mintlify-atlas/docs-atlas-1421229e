@@ -1,0 +1,398 @@
+---
+title: "Evaluator Functions"
+description: "Reference for evaluation functions used to assess agent performance and behavior"
+---
+
+## Overview
+
+Evaluators are functions that assess agent runs based on specific criteria. They integrate with LangSmith's evaluation framework to provide automated quality checks and comparative analysis.
+
+## Schema Validation
+
+### schemaBeforeQuery()
+
+Verifies that the agent checks database schema before executing data queries.
+
+<ParamField path="run" type="Run" required>
+  LangSmith run object containing execution trace
+</ParamField>
+
+<ResponseField name="key" type="string">
+  Evaluator identifier: `"schema_before_query"`
+</ResponseField>
+
+<ResponseField name="score" type="number">
+  Binary score: 1 if agent checked schema first, 0 otherwise
+</ResponseField>
+
+<ResponseField name="comment" type="string">
+  Explanation of the evaluation result
+</ResponseField>
+
+```typescript
+import type { Run } from "langsmith/schemas";
+
+export function schemaBeforeQuery(
+  run: Run,
+): { key: string; score: number; comment: string } {
+  const toolCalls = extractToolCalls(run);
+  const dbCalls = toolCalls.filter((tc) => tc.name === "query_database");
+
+  // No database calls -- nothing to check
+  if (dbCalls.length === 0) {
+    return {
+      key: "schema_before_query",
+      score: 1,
+      comment: "No query_database calls -- schema check not applicable",
+    };
+  }
+
+  // Check if any schema query appears before the first non-schema data query
+  let seenSchemaCheck = false;
+  for (const tc of dbCalls) {
+    const sql = tc.arguments ?? "";
+    if (isSchemaQuery(sql)) {
+      seenSchemaCheck = true;
+    } else {
+      // First real data query -- was there a schema check before it?
+      if (!seenSchemaCheck) {
+        return {
+          key: "schema_before_query",
+          score: 0,
+          comment: `Agent queried data without checking schema first. First query: ${sql.slice(0, 200)}`,
+        };
+      }
+      break;
+    }
+  }
+
+  return { 
+    key: "schema_before_query", 
+    score: 1, 
+    comment: "Agent checked schema before querying data" 
+  };
+}
+```
+
+#### Schema Query Detection
+
+The evaluator identifies schema queries using regex patterns:
+
+```typescript
+const SCHEMA_PATTERNS = [
+  /PRAGMA\s+table_info/i,
+  /SELECT\s+.*FROM\s+sqlite_master/i,
+  /PRAGMA\s+database_list/i,
+  /\.schema/i,
+];
+
+function isSchemaQuery(sql: string): boolean {
+  return SCHEMA_PATTERNS.some((pattern) => pattern.test(sql));
+}
+```
+
+#### Tool Call Extraction
+
+Helper function to extract tool calls from run outputs:
+
+```typescript
+interface ToolCall {
+  name: string;
+  arguments: string;
+}
+
+function extractToolCalls(run: Run): ToolCall[] {
+  const runOutputs = run.outputs ?? {};
+  const messages: any[] = runOutputs.messages ?? [];
+
+  const toolCalls: ToolCall[] = [];
+  for (const msg of messages) {
+    if (typeof msg === "object" && msg !== null) {
+      for (const tc of msg.tool_calls ?? []) {
+        const func = tc.function ?? {};
+        toolCalls.push({
+          name: func.name ?? "",
+          arguments: func.arguments ?? "",
+        });
+      }
+    }
+  }
+  return toolCalls;
+}
+```
+
+#### Usage Example
+
+```typescript
+import { evaluate } from "langsmith/evaluation";
+import { schemaBeforeQuery } from "./eval_schema_check";
+
+await evaluate(myAgent, {
+  data: "customer-support-dataset",
+  evaluators: [schemaBeforeQuery],
+});
+```
+
+## Pairwise Comparison
+
+### concisenessEvaluator()
+
+Compares two agent responses for conciseness using LLM-as-a-judge.
+
+<ParamField path="inputs" type="Record<string, any>" required>
+  Test case inputs containing the question
+</ParamField>
+
+<ParamField path="runs" type="Run[]" required>
+  Array of exactly two runs to compare
+</ParamField>
+
+<ResponseField name="key" type="string">
+  Evaluator identifier: `"conciseness"`
+</ResponseField>
+
+<ResponseField name="scores" type="Record<string, number>">
+  Map of run IDs to scores (winner gets 1, loser gets 0)
+</ResponseField>
+
+```typescript
+import OpenAI from "openai";
+import type { Run } from "langsmith/schemas";
+
+const openai = new OpenAI();
+
+const CONCISENESS_PROMPT = `You are evaluating two responses to the same customer question.
+Determine which response is MORE CONCISE while still providing all crucial information.
+
+**Conciseness** means getting straight to the point, avoiding filler, and not repeating information.
+**Crucial information** includes direct answers, necessary context, and required next steps.
+
+A shorter response is NOT automatically better if it omits crucial information.
+
+**Question:** {question}
+
+**Response A:**
+{response_a}
+
+**Response B:**
+{response_b}
+
+Output your verdict as a single number:
+1 if Response A is more concise while preserving crucial information
+2 if Response B is more concise while preserving crucial information
+0 if they are roughly equal`;
+
+export async function concisenessEvaluator({
+  inputs,
+  runs,
+}: {
+  inputs: Record<string, any>;
+  runs: Run[];
+}) {
+  const [runA, runB] = runs;
+  const scores: Record<string, number> = {};
+
+  const response = await openai.chat.completions.create({
+    model: "gpt-5-nano",
+    messages: [
+      {
+        role: "system",
+        content: "You are a conciseness evaluator. Respond with only a single number: 0, 1, or 2.",
+      },
+      {
+        role: "user",
+        content: CONCISENESS_PROMPT
+          .replace("{question}", inputs.question)
+          .replace("{response_a}", runA?.outputs?.answer ?? "N/A")
+          .replace("{response_b}", runB?.outputs?.answer ?? "N/A"),
+      },
+    ],
+  });
+
+  const preference = parseInt(
+    response.choices[0].message.content?.trim() ?? "0"
+  );
+
+  if (preference === 1) {
+    scores[runA.id] = 1;
+    scores[runB.id] = 0;
+  } else if (preference === 2) {
+    scores[runA.id] = 0;
+    scores[runB.id] = 1;
+  } else {
+    scores[runA.id] = 0;
+    scores[runB.id] = 0;
+  }
+
+  return { key: "conciseness", scores };
+}
+```
+
+#### Running Pairwise Evaluation
+
+```typescript
+import { evaluate } from "langsmith/evaluation";
+import { concisenessEvaluator } from "./eval_conciseness_pairwise";
+
+await evaluate(
+  ["agent-v4-experiment", "agent-v5-experiment"],
+  {
+    evaluators: [concisenessEvaluator],
+    randomizeOrder: true,
+  }
+);
+```
+
+## Simple Evaluators
+
+### mentionsOfficeflow()
+
+Example code-based evaluator that checks if response mentions the company name.
+
+<ParamField path="outputs" type="Record<string, any>" required>
+  Run outputs containing the response
+</ParamField>
+
+<ResponseField name="key" type="string">
+  Evaluator identifier: `"mentions_officeflow"`
+</ResponseField>
+
+<ResponseField name="score" type="boolean">
+  True if response mentions "officeflow" (case-insensitive)
+</ResponseField>
+
+```typescript
+import type { EvaluationResult } from "langsmith/evaluation";
+
+const mentionsOfficeflow = async ({ 
+  outputs 
+}: {
+  outputs: Record<string, any>;
+}): Promise<EvaluationResult> => {
+  const score = outputs?.response?.toLowerCase().includes("officeflow");
+  return { key: "mentions_officeflow", score };
+}
+```
+
+#### Usage Example
+
+```typescript
+import { evaluate } from "langsmith/evaluation";
+
+await evaluate(dummyApp, {
+  data: "officeflow-dataset",
+  evaluators: [mentionsOfficeflow],
+});
+```
+
+## Evaluation Types
+
+### Code-Based Evaluators
+
+Deterministic functions that check specific conditions:
+
+```typescript
+type CodeBasedEvaluator = (params: {
+  run?: Run;
+  example?: Example;
+  inputs?: Record<string, any>;
+  outputs?: Record<string, any>;
+}) => EvaluationResult | Promise<EvaluationResult>;
+```
+
+**Characteristics:**
+- Fast and cheap to run
+- Deterministic results
+- Good for structural checks (schema validation, format checking)
+- Limited to rule-based logic
+
+### LLM-as-Judge Evaluators
+
+Use language models to assess quality:
+
+```typescript
+const response = await openai.chat.completions.create({
+  model: "gpt-5-nano",
+  messages: [
+    { role: "system", content: "You are an evaluator..." },
+    { role: "user", content: promptWithContext },
+  ],
+});
+```
+
+**Characteristics:**
+- Can assess subjective qualities (tone, helpfulness, conciseness)
+- More expensive and slower
+- Non-deterministic (may vary between runs)
+- Requires careful prompt engineering
+
+### Pairwise Evaluators
+
+Compare two runs directly:
+
+```typescript
+type PairwiseEvaluator = (params: {
+  runs: [Run, Run];
+  inputs: Record<string, any>;
+}) => Promise<{ key: string; scores: Record<string, number> }>;
+```
+
+**Characteristics:**
+- Better for A/B testing agent versions
+- More reliable than absolute scoring
+- Requires running experiments on both variants
+- Use `randomizeOrder: true` to avoid position bias
+
+## Integration with LangSmith
+
+### Running Evaluations
+
+```typescript
+import { evaluate } from "langsmith/evaluation";
+
+// Evaluate single agent
+await evaluate(myAgent, {
+  data: "my-dataset",
+  evaluators: [schemaBeforeQuery, mentionsOfficeflow],
+  experimentPrefix: "agent-v1",
+});
+
+// Compare two agent versions
+await evaluate(
+  ["experiment-1", "experiment-2"],
+  {
+    evaluators: [concisenessEvaluator],
+    randomizeOrder: true,
+  }
+);
+```
+
+### Evaluation Results
+
+Results are logged to LangSmith and include:
+- Individual test case scores
+- Aggregate statistics
+- Comparison charts (for pairwise)
+- Trace links for debugging failures
+
+## Best Practices
+
+### Code-Based Evaluators
+
+1. **Be specific in comments** - Help developers understand failures
+2. **Handle edge cases** - Return appropriate scores for N/A cases
+3. **Keep them fast** - They run on every test case
+
+### LLM-as-Judge Evaluators
+
+1. **Use clear rubrics** - Define exactly what you're measuring
+2. **Request structured output** - Numbers or specific formats
+3. **Test your prompts** - Run on sample data first
+4. **Consider cost** - LLM calls add up on large datasets
+
+### Pairwise Evaluators
+
+1. **Randomize order** - Prevent position bias
+2. **Handle ties** - Score both as 0 for equal performance
+3. **Provide context** - Include the original question in prompts
+4. **Be consistent** - Use same criteria across all comparisons

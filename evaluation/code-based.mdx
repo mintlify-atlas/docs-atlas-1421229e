@@ -1,0 +1,431 @@
+---
+title: Code-based Evaluators
+description: Write deterministic evaluators that check agent behavior like unit tests
+---
+
+Code-based evaluators are deterministic functions that check specific, objective criteria in your agent's outputs. They work like unit tests - fast, reliable, and easy to debug.
+
+## When to Use Code-based Eval
+
+Use code-based evaluators for:
+
+- **Tool usage patterns** - Did the agent call the right tools?
+- **Output structure** - Does the response match a required schema?
+- **Keyword matching** - Does the answer mention specific terms?
+- **Workflow verification** - Did the agent follow the expected sequence?
+
+<Note>
+Code-based evaluators excel at objective, binary checks. For subjective criteria like "helpfulness" or "tone", use LLM-as-judge evaluation.
+</Note>
+
+## Basic Evaluator
+
+The simplest evaluator returns a boolean:
+
+```python simple_evaluator.py
+def mentions_officeflow(outputs: dict) -> bool:
+    """Check if response mentions the brand name."""
+    return "officeflow" in outputs["response"].lower()
+```
+
+Use it in an experiment:
+
+```python run_experiment.py
+from langsmith import evaluate
+
+results = evaluate(
+    your_agent,
+    data="officeflow-dataset",
+    evaluators=[mentions_officeflow]
+)
+```
+
+## Evaluator Signatures
+
+Evaluators can accept different parameters:
+
+### Outputs Only
+
+Check the agent's output:
+
+```python outputs_only.py
+def is_concise(outputs: dict) -> bool:
+    """Pass if answer is under 50 words."""
+    return len(outputs["answer"].split()) < 50
+```
+
+### Run Context
+
+Access the full trace to inspect tool calls, intermediate steps:
+
+```python run_context.py
+def uses_database(run, example) -> dict:
+    """Check if agent queried the database."""
+    messages = run.outputs.get("messages", [])
+    
+    for msg in messages:
+        if isinstance(msg, dict):
+            for tool_call in msg.get("tool_calls", []):
+                func_name = tool_call.get("function", {}).get("name")
+                if func_name == "query_database":
+                    return {"score": 1, "comment": "Agent used query_database"}
+    
+    return {"score": 0, "comment": "No database queries found"}
+```
+
+### With Expected Output
+
+Compare against reference answers:
+
+```python with_expected.py
+def matches_expected(outputs: dict, expected: dict) -> bool:
+    """Check if output matches expected answer."""
+    return outputs["answer"].strip() == expected["answer"].strip()
+```
+
+## Real-World Example: Schema Check
+
+This evaluator from the OfficeFlow course checks that agents inspect database schema before querying:
+
+```python eval_schema_check.py
+"""
+Evaluator: Schema-Before-Query Check
+
+Checks that whenever the agent uses query_database, it first inspects
+the database schema (via PRAGMA table_info or sqlite_master) before
+running a data query. This ensures the agent doesn't blindly guess
+column names.
+"""
+import re
+
+SCHEMA_PATTERNS = [
+    r"PRAGMA\s+table_info",
+    r"SELECT\s+.*FROM\s+sqlite_master",
+    r"PRAGMA\s+database_list",
+    r"\.schema",
+]
+
+def _is_schema_query(sql: str) -> bool:
+    """Return True if the SQL is a schema-inspection query."""
+    for pattern in SCHEMA_PATTERNS:
+        if re.search(pattern, sql, re.IGNORECASE):
+            return True
+    return False
+
+def _extract_tool_calls(run) -> list[dict]:
+    """Extract tool calls from run output messages."""
+    run_outputs = run.outputs if hasattr(run, "outputs") else run.get("outputs", {}) or {}
+    messages = run_outputs.get("messages", [])
+    
+    tool_calls = []
+    for msg in messages:
+        if isinstance(msg, dict):
+            for tc in msg.get("tool_calls", []):
+                func = tc.get("function", {})
+                tool_calls.append({
+                    "name": func.get("name", ""),
+                    "arguments": func.get("arguments", ""),
+                })
+    return tool_calls
+
+def schema_before_query(run, example) -> dict:
+    """Score 1 if the agent checks DB schema before querying data, 0 otherwise.
+    
+    If the agent never calls query_database, scores 1 (not applicable).
+    """
+    tool_calls = _extract_tool_calls(run)
+    db_calls = [tc for tc in tool_calls if tc["name"] == "query_database"]
+    
+    # No database calls — nothing to check
+    if not db_calls:
+        return {"score": 1, "comment": "No query_database calls — schema check not applicable"}
+    
+    # Check if any schema query appears before the first non-schema data query
+    seen_schema_check = False
+    for tc in db_calls:
+        sql = tc.get("arguments", "")
+        if _is_schema_query(sql):
+            seen_schema_check = True
+        else:
+            # First real data query — was there a schema check before it?
+            if not seen_schema_check:
+                return {
+                    "score": 0,
+                    "comment": f"Agent queried data without checking schema first. First query: {sql[:200]}",
+                }
+            break  # Schema was checked before first data query — pass
+    
+    if seen_schema_check:
+        return {"score": 1, "comment": "Agent checked schema before querying data"}
+    
+    return {"score": 1, "comment": "All query_database calls were schema inspections"}
+```
+
+<Note>
+This evaluator uses pattern matching to identify schema-inspection queries, then checks the order of tool calls to verify proper workflow.
+</Note>
+
+## Return Formats
+
+### Boolean
+
+Simplest format - pass/fail:
+
+```python boolean_return.py
+def check_something(outputs: dict) -> bool:
+    return some_condition
+```
+
+### Score Dictionary
+
+Provide score and explanation:
+
+```python score_dict.py
+def check_something(outputs: dict) -> dict:
+    if condition:
+        return {"score": 1, "comment": "Passed because..."}
+    else:
+        return {"score": 0, "comment": "Failed because..."}
+```
+
+### Numeric Score
+
+For continuous metrics:
+
+```python numeric_score.py
+def response_length_score(outputs: dict) -> dict:
+    word_count = len(outputs["answer"].split())
+    
+    # Score 1 for ideal length (20-40 words), decreasing outside that range
+    if 20 <= word_count <= 40:
+        score = 1.0
+    elif word_count < 20:
+        score = word_count / 20
+    else:
+        score = max(0, 1 - (word_count - 40) / 100)
+    
+    return {
+        "score": score,
+        "comment": f"Response is {word_count} words"
+    }
+```
+
+## Common Patterns
+
+### Check Tool Usage
+
+```python check_tools.py
+def used_required_tools(run, example) -> dict:
+    """Verify agent called all required tools."""
+    required_tools = example.get("metadata", {}).get("required_tools", [])
+    
+    messages = run.outputs.get("messages", [])
+    used_tools = set()
+    
+    for msg in messages:
+        if isinstance(msg, dict):
+            for tc in msg.get("tool_calls", []):
+                func_name = tc.get("function", {}).get("name")
+                if func_name:
+                    used_tools.add(func_name)
+    
+    missing = set(required_tools) - used_tools
+    
+    if missing:
+        return {
+            "score": 0,
+            "comment": f"Missing required tools: {missing}"
+        }
+    
+    return {"score": 1, "comment": "All required tools used"}
+```
+
+### Validate Output Structure
+
+```python validate_structure.py
+import json
+from jsonschema import validate, ValidationError
+
+OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "answer": {"type": "string"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "sources": {"type": "array", "items": {"type": "string"}}
+    },
+    "required": ["answer", "confidence"]
+}
+
+def validates_schema(outputs: dict) -> dict:
+    """Check if output matches expected JSON schema."""
+    try:
+        validate(instance=outputs, schema=OUTPUT_SCHEMA)
+        return {"score": 1, "comment": "Output matches schema"}
+    except ValidationError as e:
+        return {"score": 0, "comment": f"Schema validation failed: {e.message}"}
+```
+
+### Check Answer Quality
+
+```python check_quality.py
+import re
+
+def provides_specific_number(outputs: dict) -> dict:
+    """Check if answer includes a specific numeric value."""
+    answer = outputs["answer"]
+    
+    # Look for numbers in the response
+    numbers = re.findall(r'\d+', answer)
+    
+    if numbers:
+        return {
+            "score": 1,
+            "comment": f"Answer includes specific number(s): {numbers}"
+        }
+    
+    return {
+        "score": 0,
+        "comment": "Answer is vague - no specific numbers provided"
+    }
+```
+
+### Verify Workflow Order
+
+```python workflow_order.py
+def correct_workflow(run, example) -> dict:
+    """Verify agent follows: search knowledge base → query database → answer."""
+    tool_calls = _extract_tool_calls(run)
+    tool_names = [tc["name"] for tc in tool_calls]
+    
+    # Expected order
+    expected_order = ["search_knowledge_base", "query_database"]
+    
+    # Find indices of each tool
+    try:
+        kb_index = tool_names.index("search_knowledge_base")
+        db_index = tool_names.index("query_database")
+        
+        if kb_index < db_index:
+            return {"score": 1, "comment": "Correct workflow order"}
+        else:
+            return {"score": 0, "comment": "Agent queried database before searching knowledge base"}
+    except ValueError:
+        return {"score": 0, "comment": "Missing required tools"}
+```
+
+## Testing Evaluators
+
+Test your evaluators before running full experiments:
+
+```python test_evaluator.py
+import pytest
+from eval_schema_check import schema_before_query
+
+def test_schema_check_passes():
+    """Test evaluator with correct workflow."""
+    mock_run = {
+        "outputs": {
+            "messages": [
+                {
+                    "tool_calls": [
+                        {"function": {"name": "query_database", "arguments": "PRAGMA table_info(products)"}},
+                        {"function": {"name": "query_database", "arguments": "SELECT * FROM products"}}
+                    ]
+                }
+            ]
+        }
+    }
+    
+    result = schema_before_query(mock_run, {})
+    assert result["score"] == 1
+
+def test_schema_check_fails():
+    """Test evaluator with incorrect workflow."""
+    mock_run = {
+        "outputs": {
+            "messages": [
+                {
+                    "tool_calls": [
+                        {"function": {"name": "query_database", "arguments": "SELECT * FROM products"}}
+                    ]
+                }
+            ]
+        }
+    }
+    
+    result = schema_before_query(mock_run, {})
+    assert result["score"] == 0
+```
+
+## Best Practices
+
+### Provide Clear Comments
+
+Always explain why an evaluation passed or failed:
+
+```python clear_comments.py
+def good_evaluator(outputs: dict) -> dict:
+    if condition:
+        return {
+            "score": 1,
+            "comment": "Passed: Response includes required disclaimer"
+        }
+    else:
+        return {
+            "score": 0,
+            "comment": "Failed: Missing required disclaimer about return policy"
+        }
+```
+
+### Handle Edge Cases
+
+Make evaluators robust to unexpected inputs:
+
+```python robust_evaluator.py
+def safe_evaluator(outputs: dict) -> dict:
+    # Handle missing keys
+    answer = outputs.get("answer", "")
+    if not answer:
+        return {"score": 0, "comment": "No answer provided"}
+    
+    # Handle unexpected types
+    if not isinstance(answer, str):
+        return {"score": 0, "comment": f"Answer is not a string: {type(answer)}"}
+    
+    # Your actual check
+    return {"score": 1, "comment": "Valid answer"}
+```
+
+### Name Evaluators Descriptively
+
+```python descriptive_names.py
+# Good: Clear what's being checked
+def agent_checks_schema_before_query(run, example) -> dict:
+    ...
+
+# Bad: Unclear purpose
+def check1(run, example) -> dict:
+    ...
+```
+
+## Limitations
+
+Code-based evaluators struggle with:
+
+- **Subjective qualities** - "Is this response helpful?"
+- **Semantic equivalence** - Different phrasings with same meaning
+- **Tone and style** - Professional, friendly, empathetic
+- **Nuanced reasoning** - Complex multi-step logic
+
+For these criteria, use [LLM-as-judge evaluation](/evaluation/llm-judge).
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="LLM-as-Judge" icon="gavel" href="/evaluation/llm-judge">
+    Evaluate subjective criteria
+  </Card>
+  <Card title="Pairwise Eval" icon="code-compare" href="/evaluation/pairwise">
+    Compare two agent versions
+  </Card>
+</CardGroup>

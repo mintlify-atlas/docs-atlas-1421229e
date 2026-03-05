@@ -1,0 +1,150 @@
+---
+title: Why Observability Matters for AI Agents
+description: Understanding the unique challenges of debugging AI agents and how observability tools provide visibility into non-deterministic systems
+---
+
+## The Challenge of Debugging AI Agents
+
+Traditional software is deterministic—the same input produces the same output. You can debug with print statements, step through code with a debugger, and write unit tests that verify behavior. But AI agents are fundamentally different.
+
+### What Makes AI Agents Different?
+
+<CardGroup cols={2}>
+  <Card title="Non-Deterministic Behavior" icon="dice">
+    The same prompt can produce different responses. LLMs use sampling, which introduces variability by design.
+  </Card>
+  
+  <Card title="Complex Decision Trees" icon="network-wired">
+    Agents make multi-step decisions involving tool calls, reasoning chains, and context management that aren't visible in code alone.
+  </Card>
+  
+  <Card title="Dynamic Tool Usage" icon="wrench">
+    Agents decide when and how to use tools at runtime. You need to see what tools were called, with what arguments, and what they returned.
+  </Card>
+  
+  <Card title="Emergent Failures" icon="triangle-exclamation">
+    Issues often arise from the interaction between components—the prompt, the model, the tools, and the data—not from a single bug in your code.
+  </Card>
+</CardGroup>
+
+## Why Print Statements Fall Short
+
+Let's look at a real example from the OfficeFlow agent. Without observability, you might add print statements like this:
+
+```python
+async def chat(question: str) -> str:
+    print(f"User question: {question}")
+    
+    messages = [{"role": "system", "content": system_prompt}]
+    messages.append({"role": "user", "content": question})
+    
+    response = await client.chat.completions.create(
+        model="gpt-5-nano",
+        messages=messages,
+        tools=tools
+    )
+    
+    print(f"Model response: {response.choices[0].message.content}")
+    print(f"Tool calls: {response.choices[0].message.tool_calls}")
+```
+
+This approach has critical limitations:
+
+- **Scattered Information**: You see individual steps but not the complete flow
+- **No Timing Data**: You can't measure latency or identify bottlenecks
+- **Limited Context**: You don't know what the model actually "saw" or how it made decisions
+- **No Historical View**: Once the agent runs, the debug output is gone
+- **Scales Poorly**: Comparing runs or analyzing patterns across hundreds of conversations is impossible
+
+## What Observability Provides
+
+Observability tools like LangSmith give you a complete view of your agent's behavior:
+
+### 1. Complete Execution Traces
+
+Every LLM call, tool invocation, and intermediate step is captured in a hierarchical trace. You can see:
+
+- The full conversation history at each step
+- Exact prompts sent to the model (including system messages)
+- Model responses and reasoning
+- Tool arguments and return values
+- Latency for each operation
+- Token usage and costs
+
+<Tip>
+Traces persist over time, allowing you to analyze patterns, compare different versions of your agent, and investigate issues that users report days or weeks later.
+</Tip>
+
+### 2. Visual Understanding of Agent Behavior
+
+Instead of reading through text logs, you get:
+
+- **Tree visualization** showing the flow of execution
+- **Timeline view** revealing performance bottlenecks  
+- **Input/output inspection** at every level of the call stack
+- **Metadata and tags** for filtering and organizing runs
+
+### 3. Debugging at Scale
+
+When you run your agent against a dataset of test cases:
+
+- Identify which scenarios fail and why
+- Spot patterns in failures (e.g., "all stock check questions fail")
+- Compare successful vs. failed runs side-by-side
+- Track improvements as you iterate on prompts and tools
+
+## Real-World Example: The OfficeFlow Agent
+
+The course demonstrates this with Emma, a customer support agent for OfficeFlow Supply Co. The agent has two tools:
+
+1. `query_database` - SQL queries against product inventory
+2. `search_knowledge_base` - Semantic search over company policies
+
+Without observability, when a customer asks "Do you have printer paper?", you might see:
+
+```
+User question: Do you have printer paper?
+Model response: Let me check our inventory for you.
+Tool calls: [query_database]
+Query result: [("Premium Copy Paper", 450, 24.99), ...]
+Final response: Yes, we have several options available...
+```
+
+With observability (LangSmith tracing), you see:
+
+- The exact SQL query the agent generated
+- Whether it checked the database schema first
+- How it formulated the natural language response from raw data
+- How long each step took
+- What would have happened if the query failed
+
+<Card title="From Blind to Insightful" icon="eye">
+Observability transforms debugging from guesswork into systematic investigation. Instead of wondering "why did the agent do that?", you can replay the exact execution and see each decision point.
+</Card>
+
+## The Observability Foundation
+
+Observability is the foundation for everything else in building reliable agents:
+
+- **Evaluation**: You can't evaluate what you can't measure. Traces provide the data that evaluators analyze.
+- **Iteration**: Comparing v1 vs v2 of your agent requires structured traces, not text logs.
+- **Production Monitoring**: When your agent is live, observability helps you spot issues before users complain.
+- **Root Cause Analysis**: When something goes wrong, traces let you investigate without needing to reproduce the exact conditions.
+
+<Tip>
+**Start with observability from day one**. Adding it later requires retrofitting your entire codebase. The small upfront investment pays dividends immediately.
+</Tip>
+
+## Next Steps
+
+Now that you understand why observability matters, learn how to implement it:
+
+<CardGroup cols={2}>
+  <Card title="LangSmith Tracing" icon="chart-line" href="/concepts/tracing">
+    Add tracing to your agents with just a few lines of code
+  </Card>
+  
+  <Card title="Evaluation Strategies" icon="check-double" href="/concepts/evaluation">
+    Use traces to systematically evaluate and improve your agents
+  </Card>
+</CardGroup>

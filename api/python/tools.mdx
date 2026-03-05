@@ -1,0 +1,474 @@
+---
+title: 'Tool Functions'
+description: 'Python tool function reference for database queries and knowledge base search'
+---
+
+## Overview
+
+Tool functions extend agent capabilities by providing access to external data sources and services. This reference documents the database query and knowledge base search tools used in the Building Reliable Agents course.
+
+## Database Tools
+
+### `query_database()`
+
+Execute SQL queries against the inventory database.
+
+<ParamField path="query" type="str" required>
+  SQL query to execute. Must be valid SQLite syntax.
+</ParamField>
+
+<ParamField path="db_path" type="str" required>
+  Path to the SQLite database file (e.g., `"./inventory/inventory.db"`)
+</ParamField>
+
+<ResponseField name="results" type="str">
+  Query results as a string representation of a list of tuples, or an error message if the query fails
+</ResponseField>
+
+**Example:**
+
+```python
+import sqlite3
+from langsmith import traceable
+
+@traceable(name="query_database", run_type="tool")
+def query_database(query: str, db_path: str) -> str:
+    """Execute SQL query against the inventory database."""
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute(query)
+        results = cursor.fetchall()
+        conn.close()
+        return str(results)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+# Usage
+results = query_database(
+    query="SELECT name FROM sqlite_master WHERE type='table'",
+    db_path="./inventory/inventory.db"
+)
+print(results)
+```
+
+### OpenAI Tool Schema
+
+Tool definition for OpenAI's function calling:
+
+```python
+QUERY_DATABASE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "query_database",
+        "description": "SQL query to get information about our inventory for customers like products, quantities and prices.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": """SQL query to execute against the inventory database.
+
+YOU DO NOT KNOW THE SCHEMA. ALWAYS discover it first:
+1. Query 'SELECT name FROM sqlite_master WHERE type="table"' to see available tables
+2. Use 'PRAGMA table_info(table_name)' to inspect columns for each table
+3. Only after understanding the schema, construct your search queries"""
+                }
+            },
+            "required": ["query"]
+        }
+    }
+}
+```
+
+**Best Practices:**
+
+1. **Schema Discovery First**: Always instruct agents to discover the database schema before querying data
+2. **Error Handling**: Wrap database operations in try/except blocks
+3. **Connection Management**: Close database connections after each query
+4. **Query Validation**: Validate SQL queries to prevent injection attacks in production
+
+## Knowledge Base Tools
+
+### `search_knowledge_base()`
+
+Search company knowledge base documents using semantic similarity.
+
+<ParamField path="query" type="str" required>
+  Natural language search query or question
+</ParamField>
+
+<ParamField path="top_k" type="int" default="2">
+  Number of most relevant documents to return
+</ParamField>
+
+<ResponseField name="results" type="str">
+  Formatted string containing the top-k most relevant documents with relevance scores
+</ResponseField>
+
+**Example:**
+
+```python
+import numpy as np
+from openai import AsyncOpenAI
+from langsmith import traceable
+
+client = AsyncOpenAI()
+
+# Global storage (loaded at startup)
+knowledge_base_docs: list[tuple[str, str]] = []  # (filename, content)
+knowledge_base_embeddings: list[list[float]] = []
+
+@traceable(name="search_knowledge_base", run_type="tool")
+async def search_knowledge_base(query: str, top_k: int = 2) -> str:
+    """Search knowledge base using semantic similarity."""
+    if not knowledge_base_docs or not knowledge_base_embeddings:
+        return "Error: Knowledge base not loaded"
+    
+    # Generate embedding for query
+    response = await client.embeddings.create(
+        model="text-embedding-3-small",
+        input=query
+    )
+    query_embedding = response.data[0].embedding
+    
+    # Calculate cosine similarity with all documents
+    similarities = []
+    for i, doc_embedding in enumerate(knowledge_base_embeddings):
+        similarity = np.dot(query_embedding, doc_embedding) / (
+            np.linalg.norm(query_embedding) * np.linalg.norm(doc_embedding)
+        )
+        similarities.append((i, similarity))
+    
+    # Sort by similarity and get top k
+    similarities.sort(key=lambda x: x[1], reverse=True)
+    top_results = similarities[:top_k]
+    
+    # Format results
+    results = []
+    for idx, score in top_results:
+        filename, content = knowledge_base_docs[idx]
+        results.append(f"=== {filename} (relevance: {score:.3f}) ===\n{content}\n")
+    
+    return "\n".join(results)
+
+# Usage
+result = await search_knowledge_base(
+    query="What is your return policy?",
+    top_k=2
+)
+print(result)
+```
+
+### OpenAI Tool Schema
+
+```python
+SEARCH_KNOWLEDGE_BASE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "search_knowledge_base",
+        "description": "Search company knowledge base for information about policies, procedures, company info, shipping, returns, ordering, contact information, store locations, and business hours. Use this for non-product questions.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Natural language question or search query about company policies or information"
+                }
+            },
+            "required": ["query"]
+        }
+    }
+}
+```
+
+### `load_knowledge_base()`
+
+Load knowledge base documents and generate embeddings (called at startup).
+
+<ParamField path="kb_dir" type="str" default="./knowledge_base">
+  Path to knowledge base directory containing `documents/` subfolder with markdown files
+</ParamField>
+
+**Example:**
+
+```python
+import json
+from pathlib import Path
+from typing import List, Tuple
+from openai import AsyncOpenAI
+
+client = AsyncOpenAI()
+
+# Global storage
+knowledge_base_docs: List[Tuple[str, str]] = []
+knowledge_base_embeddings: List[List[float]] = []
+
+def _embeddings_are_stale(kb_path: Path, cache_path: Path) -> bool:
+    """Check if any document has been modified after embeddings were generated."""
+    if not cache_path.exists():
+        return True
+    
+    cache_mtime = cache_path.stat().st_mtime
+    
+    for file_path in kb_path.glob("*.md"):
+        if file_path.name == "CHUNKING_NOTES.md":
+            continue
+        if file_path.stat().st_mtime > cache_mtime:
+            return True
+    
+    return False
+
+async def _generate_and_cache_embeddings(kb_path: Path, cache_path: Path) -> None:
+    """Generate embeddings for all documents and save to cache."""
+    global knowledge_base_docs, knowledge_base_embeddings
+    
+    docs = []
+    for file_path in kb_path.glob("*.md"):
+        if file_path.name == "CHUNKING_NOTES.md":
+            continue
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            docs.append((file_path.name, content))
+    
+    if not docs:
+        print(f"Warning: No documents found in '{kb_path}'")
+        return
+    
+    knowledge_base_docs = docs
+    
+    print(f"Generating embeddings for {len(docs)} documents...")
+    embeddings = []
+    for filename, content in docs:
+        response = await client.embeddings.create(
+            model="text-embedding-3-small",
+            input=content
+        )
+        embeddings.append(response.data[0].embedding)
+        print(f"  {filename}")
+    
+    knowledge_base_embeddings = embeddings
+    
+    # Save to cache
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_data = {"docs": docs, "embeddings": embeddings}
+    with open(cache_path, 'w') as f:
+        json.dump(cache_data, f)
+    print(f"Embeddings cached to {cache_path}")
+
+async def load_knowledge_base(kb_dir: str = "./knowledge_base") -> None:
+    """Load knowledge base documents and embeddings.
+    
+    Automatically regenerates embeddings if any source documents have been modified.
+    """
+    global knowledge_base_docs, knowledge_base_embeddings
+    
+    kb_path = Path(kb_dir) / "documents"
+    cache_path = Path(kb_dir) / "embeddings" / "embeddings.json"
+    
+    if not kb_path.exists():
+        print(f"Warning: Knowledge base directory '{kb_dir}' not found")
+        return
+    
+    # Check if embeddings need to be regenerated
+    if _embeddings_are_stale(kb_path, cache_path):
+        print("Knowledge base documents changed, regenerating embeddings...")
+        await _generate_and_cache_embeddings(kb_path, cache_path)
+    else:
+        # Load from cache
+        with open(cache_path, 'r') as f:
+            cache_data = json.load(f)
+        knowledge_base_docs = [tuple(doc) for doc in cache_data["docs"]]
+        knowledge_base_embeddings = cache_data["embeddings"]
+        print(f"Knowledge base loaded from cache: {len(knowledge_base_docs)} documents")
+
+# Usage - call at application startup
+import asyncio
+
+async def main():
+    await load_knowledge_base("./knowledge_base")
+    # Now search_knowledge_base() can be used
+
+asyncio.run(main())
+```
+
+**Features:**
+- **Automatic Caching**: Embeddings are cached to avoid regenerating on every startup
+- **Staleness Detection**: Automatically detects when source documents change and regenerates embeddings
+- **Whole Document Retrieval**: Returns entire documents (not chunks) for better context
+
+## Text Chunking (Alternative Approach)
+
+For large documents, you can chunk them before embedding:
+
+### `chunk_text()`
+
+Split text into overlapping chunks.
+
+<ParamField path="text" type="str" required>
+  Text to split into chunks
+</ParamField>
+
+<ParamField path="chunk_size" type="int" default="200">
+  Size of each chunk in characters
+</ParamField>
+
+<ParamField path="overlap" type="int" default="20">
+  Number of overlapping characters between chunks
+</ParamField>
+
+<ResponseField name="chunks" type="list[str]">
+  List of text chunks with overlap
+</ResponseField>
+
+**Example:**
+
+```python
+from typing import List
+
+def chunk_text(text: str, chunk_size: int = 200, overlap: int = 20) -> List[str]:
+    """Split text into chunks with overlap."""
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunk = text[start:end]
+        if chunk.strip():
+            chunks.append(chunk)
+        start = end - overlap
+    return chunks
+
+# Usage
+text = "Long document text..."
+chunks = chunk_text(text, chunk_size=200, overlap=20)
+print(f"Created {len(chunks)} chunks")
+```
+
+## Tool Integration Pattern
+
+Combining multiple tools in an agent:
+
+```python
+import json
+from openai import AsyncOpenAI
+from langsmith import traceable
+
+client = AsyncOpenAI()
+
+@traceable(name="MultiToolAgent")
+async def agent_with_tools(question: str) -> dict:
+    tools = [QUERY_DATABASE_TOOL, SEARCH_KNOWLEDGE_BASE_TOOL]
+    messages = [{"role": "user", "content": question}]
+    
+    response = await client.chat.completions.create(
+        model="gpt-4",
+        messages=messages,
+        tools=tools,
+        tool_choice="auto"
+    )
+    
+    response_message = response.choices[0].message
+    
+    while response_message.tool_calls:
+        messages.append({
+            "role": "assistant",
+            "content": response_message.content or "",
+            "tool_calls": [{
+                "id": tc.id,
+                "type": tc.type,
+                "function": {
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments
+                }
+            } for tc in response_message.tool_calls]
+        })
+        
+        for tool_call in response_message.tool_calls:
+            function_args = json.loads(tool_call.function.arguments)
+            
+            # Route to appropriate tool
+            if tool_call.function.name == "query_database":
+                result = query_database(
+                    query=function_args["query"],
+                    db_path="./inventory/inventory.db"
+                )
+            elif tool_call.function.name == "search_knowledge_base":
+                result = await search_knowledge_base(
+                    query=function_args["query"]
+                )
+            else:
+                result = f"Error: Unknown tool {tool_call.function.name}"
+            
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "name": tool_call.function.name,
+                "content": result
+            })
+        
+        response = await client.chat.completions.create(
+            model="gpt-4",
+            messages=messages,
+            tools=tools,
+            tool_choice="auto"
+        )
+        response_message = response.choices[0].message
+    
+    return {"output": response_message.content, "messages": messages}
+```
+
+## Best Practices
+
+### Tool Decoration
+
+Always use `@traceable` with `run_type="tool"`:
+
+```python
+from langsmith import traceable
+
+@traceable(name="my_tool", run_type="tool")
+def my_tool(arg: str) -> str:
+    return f"Result: {arg}"
+```
+
+### Schema Instructions
+
+Provide clear instructions in tool descriptions:
+
+```python
+"description": """SQL query to execute.
+
+IMPORTANT:
+1. Always discover schema first
+2. Use PRAGMA table_info(table_name)
+3. Then construct your query"""
+```
+
+### Error Messages
+
+Return helpful error messages:
+
+```python
+try:
+    result = execute_tool()
+    return str(result)
+except Exception as e:
+    return f"Error: {str(e)}. Please check your query syntax."
+```
+
+### Async Tools
+
+Use async for I/O-bound operations:
+
+```python
+@traceable(name="api_tool", run_type="tool")
+async def api_tool(query: str) -> str:
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"/api/search?q={query}")
+        return response.text
+```
+
+## Related
+
+- [Agent Implementation](/api/python/agent) - Agent patterns using these tools
+- [Evaluators](/api/python/evaluators) - Testing tool usage

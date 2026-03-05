@@ -1,0 +1,188 @@
+---
+title: 'Moving Agents to Production'
+description: 'Transitioning reliable agents from development to production environments'
+---
+
+## From Development to Production
+
+Moving an agent system to production requires careful planning around observability, evaluation, and scalability. The transition from local development to production involves:
+
+- **Trace Management**: Systematically capturing and uploading agent execution traces
+- **Online Evaluation**: Continuous monitoring of agent performance in production
+- **Scale Considerations**: Handling increased volume and operational requirements
+
+<Warning>
+Production agents require different instrumentation than development agents. Ensure trace upload, error handling, and evaluation pipelines are in place before deploying.
+</Warning>
+
+## Production Readiness Checklist
+
+<Steps>
+  <Step title="Establish Observability">
+    Configure LangSmith or equivalent tracing to capture all agent interactions. Ensure traces include:
+    - Input/output data
+    - Execution timing
+    - Error states
+    - Custom metadata (user IDs, session IDs, etc.)
+  </Step>
+
+  <Step title="Set Up Evaluation Pipeline">
+    Deploy online evaluators that run automatically on production traces:
+    - Response quality metrics
+    - Latency thresholds
+    - Error rate monitoring
+    - Custom business logic validators
+  </Step>
+
+  <Step title="Implement Trace Upload">
+    Build a robust system for uploading traces at scale. See [Trace Upload](/production/trace-upload) for implementation details.
+  </Step>
+
+  <Step title="Configure Monitoring & Alerts">
+    Set up dashboards and alerts for:
+    - Agent success/failure rates
+    - Evaluation score distributions
+    - System latency and throughput
+    - Cost per interaction
+  </Step>
+</Steps>
+
+## Key Production Patterns
+
+### Synthetic Data for Testing
+
+Before deploying to production, generate synthetic traces that mirror expected production patterns:
+
+```python
+# Generate realistic test traces
+from datetime import datetime, timedelta
+import random
+
+def generate_synthetic_trace(category: str, user_query: str):
+    """Create a synthetic trace for testing."""
+    return {
+        "id": str(uuid.uuid4()),
+        "trace_id": str(uuid.uuid4()),
+        "name": "CustomerSupportAgent",
+        "run_type": "chain",
+        "inputs": {"question": user_query},
+        "outputs": {"answer": "..."},
+        "start_time": datetime.utcnow().isoformat(),
+        "end_time": (datetime.utcnow() + timedelta(seconds=2)).isoformat(),
+        "tags": [category],
+        "extra": {"metadata": {"category": category}}
+    }
+```
+
+### Time-Shifted Trace Upload
+
+When uploading historical or synthetic traces, shift timestamps to appear recent:
+
+```python
+from datetime import datetime, timezone
+
+# Calculate time delta to make traces appear current
+latest = max(parse_dt(r["start_time"]) for r in runs if r["start_time"])
+time_delta = datetime.now(timezone.utc).replace(tzinfo=None) - latest
+
+# Apply shift to all timestamps
+for run in runs:
+    run["start_time"] = parse_dt(run["start_time"]) + time_delta
+    if run.get("end_time"):
+        run["end_time"] = parse_dt(run["end_time"]) + time_delta
+```
+
+### ID Regeneration
+
+When re-uploading traces, generate fresh IDs while preserving parent-child relationships:
+
+```python
+from langsmith import uuid7
+
+# Build ID mapping (uuid7 preserves time-ordering)
+id_map = {}
+for run in runs:
+    for field in ("id", "trace_id", "parent_run_id"):
+        old_id = run.get(field)
+        if old_id and old_id not in id_map:
+            id_map[old_id] = str(uuid7())
+
+# Remap all IDs
+for run in runs:
+    run["id"] = id_map[run["id"]]
+    if run.get("parent_run_id"):
+        run["parent_run_id"] = id_map[run["parent_run_id"]]
+```
+
+## Operational Excellence
+
+### Batching and Flushing
+
+Always batch trace uploads and explicitly flush when complete:
+
+```python
+from langsmith import Client
+
+client = Client()
+
+# Upload traces in batches
+for i, trace_runs in enumerate(traces.values()):
+    # ... upload logic ...
+    
+    if (i + 1) % 10 == 0:
+        print(f"Uploaded {i + 1}/{len(traces)} traces")
+
+# Critical: flush before exit
+client.flush()
+```
+
+<Warning>
+Failing to call `client.flush()` may result in lost traces. Always flush before your application exits.
+</Warning>
+
+### Error Handling
+
+Production agents must gracefully handle failures:
+
+```python
+try:
+    root_tree.post(exclude_child_runs=False)
+except Exception as e:
+    logger.error(f"Failed to upload trace {root_tree.id}: {e}")
+    # Implement retry logic or dead-letter queue
+    failed_traces.append(root_tree)
+```
+
+## Production Deployment Strategies
+
+### Blue-Green Deployment
+
+1. Deploy new agent version alongside existing version
+2. Route small percentage of traffic to new version
+3. Monitor evaluation metrics for regressions
+4. Gradually increase traffic or rollback if issues detected
+
+### Canary Releases
+
+1. Deploy to single region or customer segment
+2. Run online evaluations continuously
+3. Compare metrics against baseline
+4. Full rollout only after validation period
+
+### Shadow Mode
+
+1. Run new agent version in parallel without serving responses
+2. Compare outputs against production agent
+3. Evaluate differences and edge cases
+4. Promote once confidence is established
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Trace Upload" icon="upload" href="/production/trace-upload">
+    Implement scalable trace upload systems
+  </Card>
+  <Card title="Online Evaluation" icon="chart-line" href="/production/online-evals">
+    Deploy continuous evaluation pipelines
+  </Card>
+</CardGroup>

@@ -1,0 +1,250 @@
+---
+title: TypeScript Setup
+description: Complete guide to setting up the TypeScript environment for the Building Reliable Agents course
+---
+
+## Prerequisites
+
+Before you begin, ensure you have the following:
+
+- **Chrome browser** (recommended for the best experience)
+- **Node.js >= 18** - [Download here](https://nodejs.org/) or see [Node.js version management](#nodejs-version-management) below
+- **npm** (included with Node.js)
+
+## Installation
+
+<Steps>
+  <Step title="Clone the repository">
+    Download the course repository using a shallow clone to get only the latest code:
+
+    ```bash
+    git clone --depth 1 https://github.com/langchain-ai/lca-reliable-agents.git
+    cd lca-reliable-agents/ts
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    Install all required packages using npm:
+
+    ```bash
+    npm install
+    ```
+
+    This will install all dependencies listed in `package.json`, including:
+    - LangChain and LangGraph libraries
+    - LangSmith for tracing and evaluation
+    - TypeScript and tsx for running TypeScript files
+    - All other required packages
+  </Step>
+
+  <Step title="Create environment file">
+    Make a copy of the example environment file:
+
+    ```bash
+    cp example.env .env
+    ```
+  </Step>
+
+  <Step title="Configure API keys">
+    Edit the `.env` file to include your API keys:
+
+    ```bash
+    # Required
+    OPENAI_API_KEY='your_openai_api_key_here'
+
+    # Optional, used by the question generator
+    ANTHROPIC_API_KEY='your_anthropic_api_key_here'
+
+    # Required for evaluation and tracing
+    LANGSMITH_API_KEY='your_langsmith_api_key_here'
+    LANGSMITH_TRACING=true
+    LANGSMITH_PROJECT=lca-reliable-agents
+    
+    # Uncomment the following if you are on the EU instance:
+    #LANGSMITH_ENDPOINT=https://eu.api.smith.langchain.com
+    ```
+
+    **Where to get API keys:**
+    - [LangSmith API Key](https://smith.langchain.com/) - Create a free account
+    - [OpenAI API Key](https://openai.com/index/openai-api/)
+    - [Anthropic API Key](https://console.anthropic.com) (optional)
+  </Step>
+
+  <Step title="Verify setup">
+    Run the verification script to ensure everything is configured correctly:
+
+    ```bash
+    npx tsx env_utils.ts
+    ```
+
+    **The verification script checks:**
+    - ✅ Node.js executable location and version (must be >=18)
+    - ✅ npm and tsx are available
+    - ✅ Required packages are installed with correct versions
+    - ✅ Environment variables (API keys) are properly configured
+
+    If the script flags any issues, see the [troubleshooting section](#troubleshooting) below.
+  </Step>
+</Steps>
+
+## Running Scripts
+
+This course uses TypeScript scripts. Use `npx tsx` to run them directly without a build step:
+
+```bash
+# Example: run the agent interactively
+npx tsx officeflow-agent/agent_v5.ts
+
+# Example: run an experiment
+npx tsx module-2/lesson-3/run_experiment.ts
+```
+
+<Note>
+  The `tsx` package allows you to run TypeScript files directly without compiling to JavaScript first. It's included as a dev dependency and installed with `npm install`.
+</Note>
+
+## Node.js Version Management
+
+Managing your Node.js version is often best done with a version manager. This allows you to select a Node.js version for the course independent of the system version.
+
+### Using nvm (recommended)
+
+[nvm](https://github.com/nvm-sh/nvm) (Node Version Manager) lets you install and switch between multiple Node.js versions:
+
+```bash
+# Install Node.js 22 (or any version >= 18)
+nvm install 22
+nvm use 22
+
+# Install dependencies
+npm install
+```
+
+<Note>
+  The LTS (Long Term Support) version of Node.js is recommended for stability. As of this writing, Node.js 22 is the current LTS version.
+</Note>
+
+### Using the official installer
+
+Download and install Node.js directly from [nodejs.org](https://nodejs.org/). The LTS version is recommended.
+
+After installation, verify your Node.js version:
+
+```bash
+node --version  # Should be >= 18
+npm --version
+```
+
+## Environment Variables
+
+This course uses the [dotenv](https://www.npmjs.com/package/dotenv) module to read key-value pairs from the `.env` file and set them in the environment. They do not need to be set globally in your system environment.
+
+<Warning>
+  If you have API keys already set in your system environment, they may conflict with the ones in your `.env` file. The `env_utils.ts` verification script will detect and warn you about such conflicts. By default, `dotenv.config()` does not override existing environment variables.
+</Warning>
+
+## LangSmith Configuration
+
+LangSmith is required for evaluation and tracing in this course:
+
+<Steps>
+  <Step title="Create account">
+    Sign up for a free [LangSmith account](https://smith.langchain.com/)
+  </Step>
+
+  <Step title="Generate API key">
+    Navigate to Settings → API Keys and create a new API key
+  </Step>
+
+  <Step title="Update .env file">
+    Add your LangSmith API key to the `.env` file:
+
+    ```bash
+    LANGSMITH_API_KEY='your_langsmith_api_key_here'
+    LANGSMITH_TRACING=true
+    LANGSMITH_PROJECT=lca-reliable-agents
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  If you're on the EU instance of LangSmith, uncomment and use `LANGSMITH_ENDPOINT=https://eu.api.smith.langchain.com` in your `.env` file.
+</Note>
+
+## Troubleshooting
+
+### Module not found when running scripts
+
+If you see an error like `Cannot find module`, you likely haven't installed dependencies yet.
+
+**Solution:**
+```bash
+npm install
+```
+
+Make sure you're in the correct directory (`lca-reliable-agents/ts`) when running this command.
+
+### Environment Variable Conflicts
+
+If you see a warning about "ENVIRONMENT VARIABLE CONFLICTS DETECTED", you have API keys set in your system environment that differ from your `.env` file.
+
+**Solutions:**
+1. Unset the conflicting system environment variables (commands provided in warning):
+   - macOS/Linux: `unset VARIABLE_NAME`
+   - Windows PowerShell: `Remove-Item Env:VARIABLE_NAME`
+2. Update your `.env` file to match your system environment
+
+### LangSmith Tracing Errors
+
+If you see "LANGSMITH_TRACING is enabled but LANGSMITH_API_KEY still has the example/placeholder value", you need to set a valid LangSmith API key in your `.env` file.
+
+**Solution:**
+Replace the placeholder value in `.env` with your actual LangSmith API key from [smith.langchain.com](https://smith.langchain.com/).
+
+### Wrong Node.js Version
+
+If you see a warning about Node.js version not satisfying requirements (must be >= 18):
+
+**Solutions:**
+- Install Node.js from [nodejs.org](https://nodejs.org/) (LTS version recommended)
+- Use [nvm](#using-nvm-recommended) to install and manage Node.js versions
+
+### tsx command not found
+
+If you get an error that `tsx` is not found:
+
+**Solution:**
+Make sure you've installed dependencies:
+```bash
+npm install
+```
+
+Always use `npx tsx` (not just `tsx`) to run TypeScript files, which will use the locally installed version.
+
+## Model Providers
+
+The course primarily uses OpenAI's `gpt-5-nano` model, which is very inexpensive. If you don't have an OpenAI API key, sign up [here](https://openai.com/index/openai-api/).
+
+You can optionally obtain an Anthropic API key [here](https://console.anthropic.com) for the question generator.
+
+<Warning>
+  This course has been created using particular models and model providers. You can use other providers, but you'll need to update the API keys in the `.env` file and make necessary code changes. LangChain supports many chat model providers - see the [full list here](https://docs.langchain.com/oss/js/integrations/providers/all_providers).
+</Warning>
+
+## Development Environment
+
+This course uses TypeScript scripts that you can edit and run in any editor, including:
+- VSCode
+- Cursor
+- Windsurf
+- Any text editor with a terminal
+
+Most modern editors provide excellent TypeScript support with features like:
+- IntelliSense and autocomplete
+- Type checking
+- Go-to-definition
+- Inline documentation
+
+## Using Coding Agents
+
+If you're using coding agents during the course, you can provide your agent access to the LangSmith documentation. Instructions are available [here](https://docs.langchain.com/use-these-docs).
