@@ -352,7 +352,7 @@ def multi_criteria_pairwise(inputs: dict, outputs: list[dict]) -> list[dict]:
     """
     
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-5-nano",
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"},
         temperature=0
@@ -513,15 +513,15 @@ evaluate(
 Compare different models:
 
 ```python model_comparison.py
-# Agent with GPT-4
-agent_gpt4 = ChatAgent(model="gpt-4o")
+# Agent with GPT-5-nano
+agent_gpt5 = ChatAgent(model="gpt-5-nano")
 
 # Agent with GPT-3.5
 agent_gpt35 = ChatAgent(model="gpt-3.5-turbo")
 
 # Compare quality vs cost
 evaluate(
-    (experiment_gpt4, experiment_gpt35),
+    (experiment_gpt5, experiment_gpt35),
     evaluators=[quality_evaluator]
 )
 ```

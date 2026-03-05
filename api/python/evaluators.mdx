@@ -173,7 +173,7 @@ def conciseness_evaluator(inputs: dict, outputs: list[dict]) -> list[int]:
     or [0, 0] if tied.
     """
     response = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-5-nano",
         messages=[
             {"role": "system", "content": "You are a conciseness evaluator. Respond with only a single number: 0, 1, or 2."},
             {"role": "user", "content": CONCISENESS_PROMPT.format(
@@ -287,7 +287,7 @@ client = OpenAI()
 def is_helpful(inputs: dict, outputs: dict) -> dict:
     """Use LLM to judge if response is helpful."""
     response = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-5-nano",
         messages=[
             {"role": "system", "content": "You are evaluating customer service responses. Reply with only 'yes' or 'no'."},
             {"role": "user", "content": f"""Question: {inputs['question']}
@@ -329,7 +329,7 @@ Response: {outputs['answer']}
 Respond with JSON: {{"helpfulness": 1-5, "accuracy": 1-5, "conciseness": 1-5, "professionalism": 1-5, "explanation": "..."}}"""
     
     response = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-5-nano",
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"}
     )

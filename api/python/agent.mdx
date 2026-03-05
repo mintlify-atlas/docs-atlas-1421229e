@@ -63,7 +63,7 @@ def agent(question: str) -> dict:
     
     # First API call with tool available
     response = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-5-nano",
         messages=messages,
         tools=[WEATHER_TOOL],
         tool_choice="auto"
@@ -105,7 +105,7 @@ def agent(question: str) -> dict:
         
         # Make second API call with tool results
         response = client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-5-nano",
             messages=messages,
             tools=[WEATHER_TOOL],
             tool_choice="auto"
@@ -191,7 +191,7 @@ def chat_pipeline(messages: list):
     
     # Invoke the model
     chat_completion = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-5-nano",
         messages=all_messages
     )
     
@@ -272,7 +272,7 @@ async def chat(question: str) -> dict:
     
     # First API call with tools
     response = await client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-5-nano",
         messages=messages,
         tools=tools,
         tool_choice="auto"
@@ -321,7 +321,7 @@ async def chat(question: str) -> dict:
         
         # Make next API call with tool results
         response = await client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-5-nano",
             messages=messages,
             tools=tools,
             tool_choice="auto"

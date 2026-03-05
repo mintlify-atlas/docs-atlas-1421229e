@@ -89,7 +89,7 @@ def comprehensive_evaluator(outputs: dict, expected: dict) -> dict:
     """Multi-criteria LLM evaluation."""
     
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-5-nano",
         messages=[
             {"role": "system", "content": "You are an expert evaluator. Respond only with valid JSON."},
             {"role": "user", "content": EVALUATION_PROMPT.format(
@@ -245,7 +245,7 @@ def cot_evaluator(outputs: dict, expected: dict) -> dict:
     """Chain-of-thought LLM evaluation."""
     
     response = client.chat.completions.create(
-        model="gpt-4o",
+        model="gpt-5-nano",
         messages=[{"role": "user", "content": COT_PROMPT.format(
             question=expected["question"],
             response=outputs["answer"]
@@ -385,7 +385,7 @@ import json
 client = OpenAI()
 
 response = client.chat.completions.create(
-    model="gpt-4o-mini",
+    model="gpt-5-nano",
     messages=[{
         "role": "user",
         "content": "Evaluate this response and return JSON with 'score' (0-1) and 'reasoning' fields."
